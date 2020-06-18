@@ -127,3 +127,10 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# added by wentao bao
+.idea
+.vscode
+.pyc
+logs/
+
