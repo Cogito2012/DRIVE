@@ -133,4 +133,6 @@ dmypy.json
 .vscode
 .pyc
 logs/
-
+vis_data/
+*.avi
+*.mp4

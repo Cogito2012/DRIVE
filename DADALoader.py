@@ -53,8 +53,10 @@ class DADALoader(Dataset):
         for fid in frame_ids:
             focus_file = os.path.join(focus_path, "%04d.png"%(fid))
             if not os.path.exists(focus_file):
-                print('Focus file does not exist: %s'%(focus_file))
-                break
+                focus_file = os.path.join(focus_path, "%04d.jpg"%(fid))
+                if not os.path.exists(focus_file):
+                    print('Focus file does not exist: %s'%(focus_file))
+                    break
             focus = cv2.imread(focus_file)  # BGR: (660, 1584, 3)
             if focus.shape[2] != 1:
                 focus = cv2.cvtColor(focus, cv2.COLOR_BGR2GRAY)
@@ -155,17 +157,17 @@ if __name__ == '__main__':
     transforms = transforms.Compose([data_transform.CenterCrop(224)])
 
     train_data = DADALoader(p.data_path, 'training', transforms=transforms, toTensor=False, device=device)
-    traindata_loader = DataLoader(dataset=train_data, batch_size=p.batch_size, shuffle=True, num_workers=6)
+    traindata_loader = DataLoader(dataset=train_data, batch_size=p.batch_size, shuffle=True, num_workers=1)
     print("# train set: %d"%(len(train_data)))
 
     test_data = DADALoader(p.data_path, 'testing', transforms=transforms, toTensor=False, device=device)
-    testdata_loader = DataLoader(dataset=test_data, batch_size=p.batch_size, shuffle=True, num_workers=6)
+    testdata_loader = DataLoader(dataset=test_data, batch_size=p.batch_size, shuffle=True, num_workers=1)
     print("# test set: %d"%(len(test_data)))
 
     val_data = DADALoader(p.data_path, 'validation', transforms=transforms, toTensor=False, device=device)
-    valdata_loader = DataLoader(dataset=val_data, batch_size=p.batch_size, shuffle=True, num_workers=6)
+    valdata_loader = DataLoader(dataset=val_data, batch_size=p.batch_size, shuffle=True, num_workers=1)
     print("# val set: %d"%(len(val_data)))
-    
+
     # prefetcher = PreFetcher(traindata_loader)
     # video_data, focus_data, coord_data = prefetcher.next()
     # iteration = 0
@@ -174,19 +176,18 @@ if __name__ == '__main__':
     #     video_data, focus_data, coord_data = prefetcher.next()
     #     print(iteration)
 
-
     for i, (video_data, focus_data, coord_data) in enumerate(traindata_loader):
         print("batch: %d / %d"%(i, len(traindata_loader)))
-        video_data = video_data.to(device, non_blocking=True)
-        focus_data = focus_data.to(device, non_blocking=True)
-        coord_data = coord_data.to(device, non_blocking=True)
+        # video_data = video_data.to(device, non_blocking=True)
+        # focus_data = focus_data.to(device, non_blocking=True)
+        # coord_data = coord_data.to(device, non_blocking=True)
         # print(video_data.size())  # [batchsize, 342, 660, 1584, 3]
         # print(focus_data.size())
         # print(coord_data.size())
 
-    # for i, (video_data, focus_data, coord_data) in tqdm(enumerate(testdata_loader), total=len(testdata_loader)):
-    #     pass
+    for i, (video_data, focus_data, coord_data) in tqdm(enumerate(testdata_loader), total=len(testdata_loader)):
+        pass
 
-    # for i, (video_data, focus_data, coord_data) in tqdm(enumerate(valdata_loader), total=len(valdata_loader)):
-    #     pass
+    for i, (video_data, focus_data, coord_data) in tqdm(enumerate(valdata_loader), total=len(valdata_loader)):
+        pass
 
