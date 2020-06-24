@@ -37,7 +37,6 @@ def read_mapping(map_file):
                 obj_list.remove('self')
             map_dict['participants'].append(obj_list)
             map_dict['accident'].append(strs[4])
-    f.close()
     return map_dict
 
 if __name__ == "__main__":
