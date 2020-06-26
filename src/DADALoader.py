@@ -7,9 +7,10 @@ from torchvision import transforms
 import data_transform
 
 class DADALoader(Dataset):
-    def __init__(self, root_path, phase, transforms=None, toTensor=False, device=torch.device('cuda')):
+    def __init__(self, root_path, phase, fps=1, transforms=None, toTensor=False, device=torch.device('cuda')):
         self.root_path = root_path
         self.phase = phase  # 'training', 'testing', 'validation'
+        self.fps = fps
         self.transforms = transforms
         self.toTensor = toTensor
         self.device = device
@@ -29,19 +30,20 @@ class DADALoader(Dataset):
                 data_list.append(accident + '/' + vid)
         return data_list
 
-    def read_video_frames(self, video_path):
+    def read_video_frames(self, video_path, fps=1):
         """ Read video frames
         """
         assert os.path.exists(video_path), "Path does not exist: %s"%(video_path)
         frame_ids, video_data = [], []
-        for filename in sorted(os.listdir(video_path)):  # we must sort the image files to ensure a sequential frame order
-            # get frame id list
-            fid = int(filename.split('.')[0])
-            frame_ids.append(fid)
-            # read video frame
-            im = cv2.imread(os.path.join(video_path, filename))
-            im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)  # RGB: (660, 1584, 3)
-            video_data.append(im)
+        for i, filename in enumerate(sorted(os.listdir(video_path))):  # we must sort the image files to ensure a sequential frame order
+            if i % fps == 0:
+                # get frame id list
+                fid = int(filename.split('.')[0])
+                frame_ids.append(fid)
+                # read video frame
+                im = cv2.imread(os.path.join(video_path, filename))
+                im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)  # RGB: (660, 1584, 3)
+                video_data.append(im)
         video_data = np.array(video_data, dtype=np.float32)  # 4D tensor, (N, 660, 1584, 3)
         return video_data, frame_ids
 
@@ -64,17 +66,19 @@ class DADALoader(Dataset):
         focus_data = np.array(focus_data, dtype=np.float32)
         return focus_data
 
-    def read_coord_arrays(self, coord_file):
+    def read_coord_arrays(self, frame_ids, coord_file):
         """ Read coordinate array
         """
         assert os.path.exists(coord_file), "File does not exist: %s"%(coord_file)
         coord_data = []
         with open(coord_file, 'r') as f:
-            for line in f.readlines():
+            all_lines = f.readlines()
+            for fid in frame_ids:
+                line = all_lines[fid]
                 x_coord = int(line.strip().split(',')[0])
                 y_coord = int(line.strip().split(',')[1])
                 coord_data.append([x_coord, y_coord])
-        coord_data = np.array(coord_data, dtype=np.int32)
+        coord_data = np.array(coord_data, dtype=np.float32)
         return coord_data
 
 
@@ -90,7 +94,7 @@ class DADALoader(Dataset):
         coord_file = os.path.join(self.root_path, self.phase, 'coordinate', self.data_list[index] + '_coordinate.txt')
 
         # read video frame data
-        video_data, frame_ids = self.read_video_frames(video_path)
+        video_data, frame_ids = self.read_video_frames(video_path, fps=self.fps)
         if self.transforms is not None:
             video_data = self.transforms(video_data)
 
@@ -100,8 +104,7 @@ class DADALoader(Dataset):
             focus_data = self.transforms(focus_data)
         
         # read coordinates
-        coord_data = self.read_coord_arrays(coord_file)
-        assert len(coord_data) == len(frame_ids), "Files missing in coordinates or videos!"
+        coord_data = self.read_coord_arrays(frame_ids, coord_file)
 
         if self.toTensor:
             video_data = torch.Tensor(video_data).to(self.device)

@@ -136,3 +136,5 @@ logs/
 vis_data/
 *.avi
 *.mp4
+*.png
+*.bmp
