@@ -4,7 +4,7 @@ import cv2
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
-import data_transform
+import src.data_transform
 
 class DADALoader(Dataset):
     def __init__(self, root_path, phase, fps=1, transforms=None, toTensor=False, device=torch.device('cuda')):

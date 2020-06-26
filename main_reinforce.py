@@ -1,14 +1,14 @@
 import argparse, math, os
 import numpy as np
-from enviroment import FovealVideoEnv
+from src.enviroment import FovealVideoEnv
 from RLlib.REINFORCE.reinforce_continuous import REINFORCE
 
 import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms
-from data_transform import CenterCrop
+from src.data_transform import CenterCrop
 
-from DADALoader import DADALoader
+from src.DADALoader import DADALoader
 
 
 if __name__ == "__main__":
@@ -72,11 +72,13 @@ if __name__ == "__main__":
         log_probs = []
         rewards = []
 
-        for i, (video_data, focus_data, coord_data) in enumerate(traindata_loader):
+        for i, (video_data, focus_data, coord_data) in enumerate(traindata_loader):  # (B, T, H, W, C)
             print("batch: %d / %d"%(i, len(traindata_loader)))
-            state = env.set_data(video_data, focus_data, coord_data)
+            env.set_data(video_data)
 
-            for t in range(args.num_steps):
+            # run each time step
+            for t in range(video_data.size(1)):
+                state = env.observe(video_data[:, t])
                 action, log_prob, entropy = agent.select_action(state)
                 action = action.cpu()
 
@@ -94,7 +96,7 @@ if __name__ == "__main__":
 
 
         if i_episode%args.ckpt_freq == 0:
-            torch.save(agent.model.state_dict(), os.path.join(dir, 'reinforce-'+str(i_episode)+'.pkl'))
+            torch.save(agent.model.state_dict(), os.path.join(ckpt_dir, 'reinforce-'+str(i_episode)+'.pkl'))
 
         print("Episode: {}, reward: {}".format(i_episode, np.sum(rewards)))
         
