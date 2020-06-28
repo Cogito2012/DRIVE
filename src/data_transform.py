@@ -7,6 +7,23 @@ import numbers
 import random
 
 
+def padding_inv(pred, shape_r, shape_c):
+    predictions_shape = pred.shape
+    rows_rate = shape_r / predictions_shape[0]
+    cols_rate = shape_c / predictions_shape[1]
+
+    if rows_rate > cols_rate:
+        new_cols = (predictions_shape[1] * shape_r) // predictions_shape[0]
+        pred = cv2.resize(pred, (new_cols, shape_r))
+        img = pred[:, ((pred.shape[1] - shape_c) // 2):((pred.shape[1] - shape_c) // 2 + shape_c)]
+    else:
+        new_rows = (predictions_shape[0] * shape_c) // predictions_shape[1]
+        pred = cv2.resize(pred, (shape_c, new_rows))
+        img = pred[((pred.shape[0] - shape_r) // 2):((pred.shape[0] - shape_r) // 2 + shape_r), :]
+
+    return img / (np.max(img) + 1e-6) * 255
+
+
 def padding(img, shape_r=480, shape_c=640, channels=3):
     img_padded = np.zeros((shape_r, shape_c, channels), dtype=np.uint8)
     if channels == 1:

@@ -7,15 +7,15 @@ from torchvision import transforms
 from src.data_transform import ProcessImages
 
 class DADALoader(Dataset):
-    def __init__(self, root_path, phase, interval=1, max_frames=-1, shape=None, transforms=[None, None], params_norm=None, toTensor=True):
+    def __init__(self, root_path, phase, interval=1, max_frames=-1, transforms=[None, None], params_norm=None, toTensor=True):
         self.root_path = root_path
         self.phase = phase  # 'training', 'testing', 'validation'
         self.interval = interval
         self.max_frames = max_frames
-        self.shape = shape
         self.transforms = transforms
         self.params_norm = params_norm
         self.toTensor = toTensor
+        self.fps = 30
 
         self.data_list = self.get_data_list()
 
@@ -154,6 +154,18 @@ class DADALoader(Dataset):
         return coord_data
 
 
+    def gather_info(self, index, video_data):
+        """Gather info for testing usages
+        """
+        accident_id = int(self.data_list[index].split('/')[0])
+        video_id = int(self.data_list[index].split('/')[1])
+        nframes = video_data.shape[0]
+        height = video_data.shape[1]
+        width = video_data.shape[2]
+        data_info = np.array([accident_id, video_id, nframes, height, width], dtype=np.int64)
+        return data_info
+
+
     def __len__(self):
         # return the number of videos for each batch
         return len(self.data_list)
@@ -162,6 +174,9 @@ class DADALoader(Dataset):
 
         # read video frame data, (T, H, W, C)
         video_data, frame_ids = self.read_frames_from_images(index, interval=self.interval, max_frames=self.max_frames)
+        # save info
+        data_info = self.gather_info(index, video_data)
+
         # video_data, frame_ids = self.read_frames_from_videos(index, interval=self.interval, max_frames=self.max_frames)
         if self.transforms['image'] is not None:
             video_data = self.transforms['image'](video_data)  # (T, C, H, W)
@@ -182,6 +197,10 @@ class DADALoader(Dataset):
             video_data = torch.Tensor(video_data)
             focus_data = torch.Tensor(focus_data)
             coord_data = torch.Tensor(coord_data)
+            data_info = torch.Tensor(data_info)
+
+        if self.phase == 'testing':
+            return video_data, focus_data, data_info
 
         return video_data, focus_data, coord_data
      
