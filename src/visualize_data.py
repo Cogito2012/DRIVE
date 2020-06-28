@@ -10,6 +10,7 @@ def get_video_frames(videofile):
     while (ret):
         video_data.append(frame)
         ret, frame = cap.read()
+    
     return video_data
 
 def read_coord_arrays(coord_file):

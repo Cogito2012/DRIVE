@@ -2,104 +2,64 @@
 https://raw.githubusercontent.com/piergiaj/pytorch-i3d/master/videotransforms.py
 """
 import numpy as np
+import cv2
 import numbers
 import random
 
-class RandomCrop(object):
-    """Crop the given video sequences (t x h x w) at a random location.
+
+def padding(img, shape_r=480, shape_c=640, channels=3):
+    img_padded = np.zeros((shape_r, shape_c, channels), dtype=np.uint8)
+    if channels == 1:
+        img_padded = np.zeros((shape_r, shape_c), dtype=np.uint8)
+
+    original_shape = img.shape
+    rows_rate = original_shape[0]/shape_r
+    cols_rate = original_shape[1]/shape_c
+
+    if rows_rate > cols_rate:
+        new_cols = (original_shape[1] * shape_r) // original_shape[0]
+        img = cv2.resize(img, (new_cols, shape_r))
+        if new_cols > shape_c:
+            new_cols = shape_c
+        img_padded[:, ((img_padded.shape[1] - new_cols) // 2):((img_padded.shape[1] - new_cols) // 2 + new_cols)] = img
+    else:
+        new_rows = (original_shape[0] * shape_c) // original_shape[1]
+        img = cv2.resize(img, (shape_c, new_rows))
+        if new_rows > shape_r:
+            new_rows = shape_r
+        img_padded[((img_padded.shape[0] - new_rows) // 2):((img_padded.shape[0] - new_rows) // 2 + new_rows), :] = img
+
+    return img_padded
+
+
+class ProcessImages(object):
+    """Pre-process images with padded resize operation, and normalize
     Args:
-        size (sequence or int): Desired output size of the crop. If size is an
-            int instead of sequence like (h, w), a square crop (size, size) is
-            made.
+        input_shape: (shape_r, shape_c)
     """
-
-    def __init__(self, size):
-        if isinstance(size, numbers.Number):
-            self.size = (int(size), int(size))
+    def __init__(self, input_shape):
+        if isinstance(input_shape, numbers.Number):
+            self.input_shape = (int(input_shape), int(input_shape))
         else:
-            self.size = size
-
-    @staticmethod
-    def get_params(img, output_size):
-        """Get parameters for ``crop`` for a random crop.
-        Args:
-            img (PIL Image): Image to be cropped.
-            output_size (tuple): Expected output size of the crop.
-        Returns:
-            tuple: params (i, j, h, w) to be passed to ``crop`` for random crop.
-        """
-        t, h, w, c = img.shape
-        th, tw = output_size
-        if w == tw and h == th:
-            return 0, 0, h, w
-
-        i = random.randint(0, h - th) if h!=th else 0
-        j = random.randint(0, w - tw) if w!=tw else 0
-        return i, j, th, tw
+            self.input_shape = input_shape
 
     def __call__(self, imgs):
+        """
+        imgs: RGB images (T, H, W, C)
+        """
+        t, h, w, c = imgs.shape
+        shape_r, shape_c = self.input_shape
         
-        i, j, h, w = self.get_params(imgs, self.size)
-
-        imgs = imgs[:, i:i+h, j:j+w, :]
-        return imgs
-
-    def __repr__(self):
-        return self.__class__.__name__ + '(size={0})'.format(self.size)
-
-class CenterCrop(object):
-    """Crops the given seq Images at the center.
-    Args:
-        size (sequence or int): Desired output size of the crop. If size is an
-            int instead of sequence like (h, w), a square crop (size, size) is
-            made.
-    """
-
-    def __init__(self, size):
-        if isinstance(size, numbers.Number):
-            self.size = (int(size), int(size))
-        else:
-            self.size = size
-
-    def __call__(self, imgs):
-        """
-        Args:
-            img (PIL Image): Image to be cropped.
-        Returns:
-            PIL Image: Cropped image.
-        """
-        t, h, w = imgs.shape[:3]
-        th, tw = self.size
-        i = int(np.round((h - th) / 2.))
-        j = int(np.round((w - tw) / 2.))
-
-        return imgs[:, i:i+th, j:j+tw]
-
+        ims = np.zeros((t, shape_r, shape_c, c))
+        for i, im in enumerate(imgs):
+            padded_image = padding(im, shape_r, shape_c, c)
+            if c == 1:
+                padded_image = np.expand_dims(padded_image, axis=-1)
+            ims[i] = padded_image.astype('float')
+        # normalize
+        ims /= 255.0
+        ims = np.rollaxis(ims, 3, 1)  # (t, c, h, w)
+        return ims
 
     def __repr__(self):
-        return self.__class__.__name__ + '(size={0})'.format(self.size)
-
-
-class RandomHorizontalFlip(object):
-    """Horizontally flip the given seq Images randomly with a given probability.
-    Args:
-        p (float): probability of the image being flipped. Default value is 0.5
-    """
-
-    def __init__(self, p=0.5):
-        self.p = p
-
-    def __call__(self, imgs):
-        """
-        Args:
-            img (seq Images): seq Images to be flipped.
-        Returns:
-            seq Images: Randomly flipped seq images.
-        """
-        if random.random() < self.p:
-            # t x h x w
-            return np.flip(imgs, axis=2).copy()
-        return imgs
-
-    def __repr__(self):
-        return self.__class__.__name__ + '(p={})'.format(self.p)
+        return self.__class__.__name__ + '(input_shape={0})'.format(self.input_shape)

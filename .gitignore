@@ -138,3 +138,5 @@ vis_data/
 *.mp4
 *.png
 *.bmp
+*.out
+output/*
