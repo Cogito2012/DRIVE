@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision import models, transforms
+import math
 
 class ResNet_FPN(torch.nn.Module):
     def __init__(self, n_layers=50, preTrained=False):
@@ -74,37 +75,61 @@ class MLNet(nn.Module):
         super(MLNet, self).__init__()
         self.input_shape = input_shape
         self.output_shape = [int(input_shape[0] / 8), int(input_shape[1] / 8)]
-        self.prior_size = [int(self.output_shape[0] / 10), int(self.output_shape[1] / 10)]
+        self.scale_factor = 10
+        self.prior_size = [int(self.output_shape[0] / self.scale_factor), int(self.output_shape[1] / self.scale_factor)]
 
-        # loading pre-trained vgg16 model and         
-        # removing last max pooling layer
-        features = list(models.vgg16(pretrained = True).features)[:-1]
+        # loading pre-trained vgg16 model and removing last max pooling layer (Conv5-3 pooling)
+        # 16: conv3-3 pool (1/8), 23: conv4-3 pool (1/16), 30: conv5-3 (1/16)
+        vgg16_model = models.vgg16(pretrained = True)
+        self.freeze_params(vgg16_model, 21)
+        features = list(vgg16_model.features)[:-1]
         
-        # making same spatial size
-        # by calculation :) 
+        # making same spatial size  by calculation :) 
         # in pytorch there was problem outputing same size in maxpool2d
         features[23].stride = 1
         features[23].kernel_size = 5
         features[23].padding = 2
-                
+
         self.features = nn.ModuleList(features).eval()
         # adding dropout layer
         self.fddropout = nn.Dropout2d(p=0.5)
         # adding convolution layer to down number of filters 1280 ==> 64
-        self.int_conv = nn.Conv2d(1280,64,kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
-        self.pre_final_conv = nn.Conv2d(64,1,kernel_size=(1, 1), stride=(1, 1) ,padding=(0, 0))
+        self.int_conv = nn.Conv2d(1280, 64, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+        self.pre_final_conv = nn.Conv2d(64, 1, kernel_size=(1, 1), stride=(1, 1) ,padding=(0, 0))
         # prior initialized to ones
-        self.prior = nn.Parameter(torch.ones((1,1, self.prior_size[0], self.prior_size[1]), requires_grad=True))
+        self.prior = nn.Parameter(torch.ones((1, 1, self.prior_size[0], self.prior_size[1]), requires_grad=True))
         
         # bilinear upsampling layer
-        self.bilinearup = torch.nn.UpsamplingBilinear2d(scale_factor=10)
+        self.bilinearup = torch.nn.UpsamplingBilinear2d(scale_factor=self.scale_factor)
+
+        # initialize new parameters
+        self.init_new_params()
         
 
-    def forward(self, x):
+    def freeze_params(self, model, last_freeze_layer):
+        # freezing Layer
+        for i, param in enumerate(model.parameters()):
+            if i <= last_freeze_layer:
+                param.requires_grad = False
+
+
+    def init_new_params(self):
+
+        def zero_params(tensor):
+            if tensor is not None:
+                tensor.data.fill_(0)
         
+        nn.init.kaiming_normal_(self.int_conv.weight, mode='fan_out', nonlinearity='relu')
+        zero_params(self.int_conv.bias)
+        nn.init.kaiming_normal_(self.pre_final_conv.weight, mode='fan_out', nonlinearity='relu')
+        zero_params(self.pre_final_conv.bias)
+        torch.nn.init.xavier_normal_(self.prior)
+
+
+    def forward(self, x):
         results = []
         for ii, model in enumerate(self.features):
-            model = model.to(x.device)
+            # model = model.to(x.device)
             x = model(x)
             if ii in {16,23,29}:
                 results.append(x)
@@ -121,11 +146,10 @@ class MLNet(nn.Module):
         x = self.pre_final_conv(x)
 
         upscaled_prior = self.bilinearup(self.prior)
-        # print ("upscaled_prior shape: {}".format(upscaled_prior.shape))
 
         # dot product with prior
         x = x * upscaled_prior
-        x = torch.nn.functional.relu(x,inplace=True)
+        x = torch.nn.functional.relu(x, inplace=True)
         return x
 
     
@@ -140,5 +164,5 @@ class ModMSELoss(torch.nn.Module):
         prior_size = prior.shape
         output_max = torch.max(torch.max(output,2)[0],2)[0].unsqueeze(2).unsqueeze(2).expand(output.shape[0],output.shape[1],self.shape_r_gt,self.shape_c_gt)
         reg = ( 1.0/(prior_size[0]*prior_size[1]) ) * ( 1 - prior)**2  # (1, 1, 6, 8)
-        loss = torch.mean( ((output / (output_max + 1e-6)) - label)**2 / (1 - label + 0.1) )  +  torch.sum(reg)
+        loss = torch.mean( ((output / (output_max + 1e-6) - label) / (1 - label + 0.1))**2)  +  torch.sum(reg)
         return loss

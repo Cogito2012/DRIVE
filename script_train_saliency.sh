@@ -18,11 +18,11 @@ GPU_IDS=0
 
 CUDA_VISIBLE_DEVICES=$GPU_IDS python main_saliency.py \
     --phase train \
-    --batch_size 3 \
+    --batch_size 1 \
     --frame_interval 5 \
-    --max_frames 64 \
-    --input_shape 240 320 \
-    --epoch 20 \
+    --max_frames 32 \
+    --input_shape 480 640 \
+    --epoch 40 \
     --gpus $GPU_IDS \
     --num_workers 4 \
     --output ./output/saliency
