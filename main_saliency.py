@@ -137,8 +137,6 @@ def test():
     # run inference
     with torch.no_grad():
         for i, (video_data, focus_data, data_info) in enumerate(testdata_loader):
-            if i > 2:
-                continue
             # parse data info
             data_info = data_info.cpu().numpy() if data_info.is_cuda else data_info.detach().numpy()
             filename = str(int(data_info[0, 0])) + '_%03d'%(int(data_info[0, 1])) + '.avi'
@@ -146,7 +144,8 @@ def test():
 
             # prepare result video writer
             result_videofile = os.path.join(result_dir, filename)
-            
+            if os.path.exists(result_videofile):
+                continue
             # for each video
             pred_video = []
             for fid in tqdm(range(num_frames), total=num_frames, desc="Testing video [%d / %d]"%(i, len(testdata_loader))):
@@ -164,6 +163,56 @@ def test():
             write_video(result_videofile, torch.from_numpy(pred_video), test_data.fps)
 
 
+def evaluate():
+    pred_dir = os.path.join(args.output, 'testing')
+    assert os.path.exists(pred_dir), "No predicted results!"
+    import metrics.saliency.saliency_metrics as metrics
+    from terminaltables import AsciiTable
+
+    metrics_mean = np.zeros((5,), dtype=np.float32)
+    num_samples = 0
+    for filename in sorted(os.listdir(pred_dir)):
+        if not filename.endswith('.avi'):
+            continue
+        # read predicted saliency video
+        salmaps_pred = read_saliency_videos(os.path.join(pred_dir, filename))
+        # read ground truth video
+        salmaps_gt = read_saliency_videos(os.path.join(args.data_path, 'testing', 'focus_videos', filename.split('_')[0], filename.split('_')[1]))
+        assert salmaps_pred.shape[0] == salmaps_gt.shape[0], "Predictions and GT are not aligned! %s"%(filename)
+        # compute metrics for each frame
+        for i, (map_pred, map_gt) in enumerate(zip(salmaps_pred, salmaps_gt)):
+            sim = metrics.similarity(map_pred, map_gt)
+            cc = metrics.cc(map_pred, map_gt)
+            nss = metrics.nss(map_pred, map_gt)
+            sauc = metrics.auc_shuff(map_pred, map_gt, map_gt)
+            aucj = metrics.auc_judd(map_pred, map_gt)
+            metrics_mean += np.array([sim, cc, nss, sauc, aucj], dtype=np.float32)
+            num_samples += 1
+    metrics_mean /= num_samples
+    # report performances
+    display_data = [["Metrics", "SIM", "CC", "NSS", "sAUC", "AUC-J"], ["Ours"]]
+    for val in metrics_mean:
+        display_data[1].append("%.3f"%(val))
+    display_title = "Video Saliency Prediction Results on DADA-2000 Dataset."
+    table = AsciiTable(display_data, display_title)
+    table.inner_footing_row_border = True
+    print(table)
+
+
+def read_saliency_videos(video_file):
+    assert os.path.exists(video_file), "Saliency video file does not exist! %s"%(video_file)
+    salmaps = []
+    cap = cv2.VideoCapture(video_file)
+    ret, frame = cap.read()
+    while (ret):
+        # RGB (660, 1584, 3) --> Gray (660, 1584)
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        salmaps.append(frame)
+        ret, frame = cap.read()
+    salmaps = np.array(salmaps, dtype=np.float32) / 255.0
+    return salmaps
+
+
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description='PyTorch Saliency implementation')
@@ -175,7 +224,7 @@ if __name__ == "__main__":
                         help='The number of frames per second for each video. Default: 10')
     parser.add_argument('--max_frames', default=16, type=int,
                         help='Maximum number of frames for each untrimmed video.')
-    parser.add_argument('--phase', default='train', choices=['train', 'test'],
+    parser.add_argument('--phase', default='train', choices=['train', 'test', 'eval'],
                         help='Training or testing phase.')
     parser.add_argument('--epoch', type=int, default=20,
                         help='The number of training epochs, default: 20.')
@@ -206,6 +255,8 @@ if __name__ == "__main__":
         train()
     elif args.phase == 'test':
         test()
+    elif args.phase == 'eval':
+        evaluate()
     else:
         raise NotImplementedError
     

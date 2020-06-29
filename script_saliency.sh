@@ -38,7 +38,13 @@ case ${PHASE} in
         --input_shape 480 640 \
         --gpus $GPU_IDS \
         --output ./output/saliency \
-        --model_weights saliency_model_03.pth
+        --model_weights saliency_model_25.pth
+    ;;
+  evaluate)
+    # evaluate the results
+    python main_saliency.py \
+        --phase eval \
+        --output ./output/saliency
     ;;
   *)
     echo "Invalid argument!"
