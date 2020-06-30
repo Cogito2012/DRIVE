@@ -2,7 +2,6 @@ import os
 import torch
 from sklearn.utils import shuffle
 from src.saliency_models import MLNet, ModMSELoss
-# from src.utils import preprocess_images, preprocess_maps
 from src.DADALoader import DADALoader
 import time, argparse
 from torch.utils.data import DataLoader
@@ -166,10 +165,14 @@ def test():
 def evaluate():
     pred_dir = os.path.join(args.output, 'testing')
     assert os.path.exists(pred_dir), "No predicted results!"
-    import metrics.saliency.saliency_metrics as metrics
+    # import metrics.saliency.saliency_metrics as metrics
     from terminaltables import AsciiTable
+    # import ipdb; ipdb.set_trace()
+    import transplant
+    matlab = transplant.Matlab(jvm=False, desktop=False)
+    matlab.addpath('metrics/saliency/code_forMetrics')
 
-    metrics_mean = np.zeros((5,), dtype=np.float32)
+    metrics_mean = np.zeros((4,), dtype=np.float32)
     num_samples = 0
     for filename in sorted(os.listdir(pred_dir)):
         if not filename.endswith('.avi'):
@@ -180,17 +183,18 @@ def evaluate():
         salmaps_gt = read_saliency_videos(os.path.join(args.data_path, 'testing', 'focus_videos', filename.split('_')[0], filename.split('_')[1]))
         assert salmaps_pred.shape[0] == salmaps_gt.shape[0], "Predictions and GT are not aligned! %s"%(filename)
         # compute metrics for each frame
-        for i, (map_pred, map_gt) in enumerate(zip(salmaps_pred, salmaps_gt)):
-            sim = metrics.similarity(map_pred, map_gt)
-            cc = metrics.cc(map_pred, map_gt)
-            nss = metrics.nss(map_pred, map_gt)
-            sauc = metrics.auc_shuff(map_pred, map_gt, map_gt)
-            aucj = metrics.auc_judd(map_pred, map_gt)
-            metrics_mean += np.array([sim, cc, nss, sauc, aucj], dtype=np.float32)
+        for i, (map_pred, map_gt) in tqdm(enumerate(zip(salmaps_pred, salmaps_gt)), total=salmaps_pred.shape[0], desc="Evaluate %s"%(filename)):
+            # We cannot compute AUC metrics (AUC-Judd, shuffled AUC, and AUC_borji) 
+            # since we do not have binary map of human fixation points
+            sim = matlab.similarity(map_pred, map_gt)
+            cc = matlab.CC(map_pred, map_gt)
+            nss = matlab.NSS(map_pred, map_gt)
+            kl = matlab.KLdiv(map_pred, map_gt)
+            metrics_mean += np.array([sim, cc, nss, kl], dtype=np.float32)
             num_samples += 1
     metrics_mean /= num_samples
     # report performances
-    display_data = [["Metrics", "SIM", "CC", "NSS", "sAUC", "AUC-J"], ["Ours"]]
+    display_data = [["Metrics", "SIM", "CC", "NSS", "KL"], ["Ours"]]
     for val in metrics_mean:
         display_data[1].append("%.3f"%(val))
     display_title = "Video Saliency Prediction Results on DADA-2000 Dataset."

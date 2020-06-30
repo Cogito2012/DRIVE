@@ -4,7 +4,6 @@ import cv2
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
-from src.data_transform import ProcessImages
 
 class DADALoader(Dataset):
     def __init__(self, root_path, phase, interval=1, max_frames=-1, transforms=[None, None], params_norm=None, toTensor=True):
@@ -233,6 +232,7 @@ class PreFetcher():
      
 if __name__ == '__main__':
     from torch.utils.data import DataLoader
+    from data_transform import ProcessImages
     import argparse, time
     from tqdm import tqdm
 
@@ -257,17 +257,17 @@ if __name__ == '__main__':
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
     transform_image = transforms.Compose([ProcessImages(args.input_shape)])
-    transform_focus = transforms.Compose([ProcessImages(args.input_shape[0] / 8)])
+    transform_focus = None
     params_norm = {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}
 
-    train_data = DADALoader(args.data_path, 'training', interval=args.frame_interval, max_frames=args.max_frames, shape=args.input_shape, 
-                            transforms={'image':transform_image, 'focus':transform_focus}, params_norm=params_norm, toTensor=False)
+    train_data = DADALoader(args.data_path, 'training', interval=args.frame_interval, max_frames=args.max_frames,
+                            transforms={'image':transform_image, 'focus':transform_focus}, params_norm=params_norm)
 
     transforms = transforms.Compose([ProcessImages(args.input_shape)])
     params_norm = {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}
-    train_data = DADALoader(args.data_path, 'training', interval=args.frame_interval, max_frames=args.max_frames, shape=args.input_shape, 
+    train_data = DADALoader(args.data_path, 'training', interval=args.frame_interval, max_frames=args.max_frames,
                             transforms=transforms, params_norm=params_norm, toTensor=False)
-    traindata_loader = DataLoader(dataset=train_data, batch_size=args.batch_size, shuffle=True, num_workers=1)
+    traindata_loader = DataLoader(dataset=train_data, batch_size=args.batch_size, shuffle=True)
     print("# train set: %d"%(len(train_data)))
 
     # prefetcher = PreFetcher(traindata_loader)

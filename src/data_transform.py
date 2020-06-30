@@ -67,12 +67,12 @@ class ProcessImages(object):
         t, h, w, c = imgs.shape
         shape_r, shape_c = self.input_shape
         
-        ims = np.zeros((t, shape_r, shape_c, c))
+        ims = np.zeros((t, shape_r, shape_c, c), dtype=np.float64)
         for i, im in enumerate(imgs):
             padded_image = padding(im, shape_r, shape_c, c)
             if c == 1:
                 padded_image = np.expand_dims(padded_image, axis=-1)
-            ims[i] = padded_image.astype('float')
+            ims[i] = padded_image.astype(np.float64)
         # normalize
         ims /= 255.0
         ims = np.rollaxis(ims, 3, 1)  # (t, c, h, w)
