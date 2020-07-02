@@ -162,18 +162,13 @@ def test():
             write_video(result_videofile, torch.from_numpy(pred_video), test_data.fps)
 
 
-def evaluate():
-    pred_dir = os.path.join(args.output, 'testing')
-    assert os.path.exists(pred_dir), "No predicted results!"
+def eval(pred_dir):
     # import metrics.saliency.saliency_metrics as metrics
-    from terminaltables import AsciiTable
-    # import ipdb; ipdb.set_trace()
     import transplant
     matlab = transplant.Matlab(jvm=False, desktop=False)
     matlab.addpath('metrics/saliency/code_forMetrics')
 
-    metrics_mean = np.zeros((4,), dtype=np.float32)
-    num_samples = 0
+    metrics_all = []
     for filename in sorted(os.listdir(pred_dir)):
         if not filename.endswith('.avi'):
             continue
@@ -183,6 +178,8 @@ def evaluate():
         salmaps_gt = read_saliency_videos(os.path.join(args.data_path, 'testing', 'focus_videos', filename.split('_')[0], filename.split('_')[1]))
         assert salmaps_pred.shape[0] == salmaps_gt.shape[0], "Predictions and GT are not aligned! %s"%(filename)
         # compute metrics for each frame
+        num_frames = salmaps_pred.shape[0]
+        metrics_video = np.zeros((num_frames, 4), dtype=np.float32)
         for i, (map_pred, map_gt) in tqdm(enumerate(zip(salmaps_pred, salmaps_gt)), total=salmaps_pred.shape[0], desc="Evaluate %s"%(filename)):
             # We cannot compute AUC metrics (AUC-Judd, shuffled AUC, and AUC_borji) 
             # since we do not have binary map of human fixation points
@@ -190,17 +187,34 @@ def evaluate():
             cc = matlab.CC(map_pred, map_gt)
             nss = matlab.NSS(map_pred, map_gt)
             kl = matlab.KLdiv(map_pred, map_gt)
-            metrics_mean += np.array([sim, cc, nss, kl], dtype=np.float32)
-            num_samples += 1
-    metrics_mean /= num_samples
+            metrics_video[i, :] = np.array([sim, cc, nss, kl], dtype=np.float32)
+    metrics_all.append(metrics_video)
+    return metrics_all
+
+
+def evaluate():
+    pred_dir = os.path.join(args.output, 'testing')
+    assert os.path.exists(pred_dir), "No predicted results!"
+
+    result_file = os.path.join(args.output, 'eval_mlnet.npy')
+    if not os.path.exists(result_file):
+        # run evaluation
+        metrics_all = eval(pred_dir)
+        np.save(result_file, metrics_all)
+    else:
+        metrics_all = np.load(result_file)
+    metrics_all = np.array(metrics_all, dtype=np.float32)
+    eval_result = np.mean(metrics_all, axis=(0, 1))
+    
     # report performances
+    from terminaltables import AsciiTable
     display_data = [["Metrics", "SIM", "CC", "NSS", "KL"], ["Ours"]]
-    for val in metrics_mean:
+    for val in eval_result:
         display_data[1].append("%.3f"%(val))
     display_title = "Video Saliency Prediction Results on DADA-2000 Dataset."
     table = AsciiTable(display_data, display_title)
     table.inner_footing_row_border = True
-    print(table)
+    print(table.table)
 
 
 def read_saliency_videos(video_file):
