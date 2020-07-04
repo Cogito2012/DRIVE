@@ -1,18 +1,23 @@
 import torch
-from saliency_models import ResNet_FPN
-
+from src.saliency_models import MLNet
+from src.TorchFovea import TorchFovea
 
 class FovealVideoEnv:
-    def __init__(self, device=torch.device("cuda")):
+    def __init__(self, input_shape, device=torch.device("cuda")):
         self.device = device
-        self.observation_model = ResNet_FPN(n_layers=50, preTrained=True)
+        # self.observe_model = ResNet_FPN(n_layers=50, preTrained=True)
+        self.observe_model = MLNet(input_shape).to(device)
+        self.output_shape = self.observe_model.output_shape
+        self.foveal_model = TorchFovea(input_shape, min(input_shape)/6.0, level=5, factor=2, device=device)
 
 
     def set_data(self, video_data):
+        """video data: (B, T, C, H, W)
+        """ 
         video_data = torch.Tensor(video_data).to(self.device)
-        self.batch_size, self.max_step, height, width = video_data.size(0), video_data.size(1), video_data.size(2), video_data.size(3)
+        self.batch_size, self.max_step, height, width = video_data.size(0), video_data.size(1), video_data.size(3), video_data.size(4)
         # set the initial fixation point at the center of image
-        self.fixation = torch.Tensor([width / 2.0, height / 2.0]).to(torch.int64)
+        self.fixation = torch.Tensor([width / 2.0, height / 2.0]).to(torch.int64).to(device=self.device)
         # self.reset()
 
     def reset(self):
@@ -23,7 +28,18 @@ class FovealVideoEnv:
 
 
     def observe(self, frame):
-        featmaps = self.observation_model(frame.permute(0, 3, 1, 2))
+        """
+        frame: (B, C, H, W)
+        """ 
+        # foveation
+        fovea_image = self.foveal_model.foveate(frame, self.fixation)
+        # compute saliency map
+        featmaps = self.observe_model(fovea_image)
+
+        # fovea_image = fovea_image.permute(0, 2, 3, 1)  # (B, H, W, C)
+        # foveated_image = fovea_image[0].cpu().detach().numpy()
+        # import cv2
+        # cv2.imwrite("result1.png", foveated_image)
 
         states = None
         return states
