@@ -1,6 +1,6 @@
 import argparse, math, os
 import numpy as np
-from src.enviroment import FovealVideoEnv
+from src.enviroment import DashCamEnv
 from RLlib.REINFORCE.reinforce_continuous import REINFORCE
 
 import torch
@@ -20,7 +20,7 @@ def parse_main_args():
                         help='The batch size in training process. Default: 10')
     parser.add_argument('--frame_rate', type=int, default=2,
                         help='The number of frames per second for each video. Default: 10')
-    parser.add_argument('--input_shape', nargs='+', type=int, default=[480, 640],
+    parser.add_argument('--input_shape', nargs='+', type=int, default=[240, 320],
                         help='The input shape of images. default: [r=480, c=640]')
     parser.add_argument('--frame_interval', type=int, default=5,
                         help='The number of frames per second for each video. Default: 10')
@@ -85,7 +85,7 @@ def setup_dataloader(input_shape, output_shape):
 
 def train():
     # initilize environment
-    env = FovealVideoEnv(args.input_shape, device=device)
+    env = DashCamEnv(args.input_shape, device=device)
     # env.seed(args.seed)
 
     # prepare output directory
@@ -94,7 +94,9 @@ def train():
         os.makedirs(ckpt_dir)
 
     # initialize agents
-    agent = REINFORCE(args.hidden_size, 256, 8)
+    dim_observe = 128
+    dim_action = 12
+    agent = REINFORCE(args.hidden_size, dim_observe, dim_action, device=device)
 
     # initialize dataset
     traindata_loader, evaldata_loader = setup_dataloader(args.input_shape, env.output_shape)
@@ -110,16 +112,16 @@ def train():
             # run each time step
             for t in range(video_data.size(1)):
                 frame_data = video_data[:, t].to(device, dtype=torch.float)  # (B, C, H, W)
-                state = env.observe(frame_data)
+                state = env.observe(frame_data)  # (1, 64, 30, 40)
                 action, log_prob, entropy = agent.select_action(state)
                 action = action.cpu()
 
-                next_state, reward, done, _ = env.step(action.numpy()[0])
+                next_state, reward, done, _ = env.step(action)
 
                 entropies.append(entropy)
                 log_probs.append(log_prob)
                 rewards.append(reward)
-                state = torch.Tensor([next_state])
+                state = next_state.clone()
 
                 if done:
                     break

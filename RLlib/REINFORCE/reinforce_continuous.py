@@ -23,6 +23,7 @@ class Policy(nn.Module):
         super(Policy, self).__init__()
 
         self.linear1 = nn.Linear(num_inputs, hidden_size)
+        # predict orientation
         self.linear2 = nn.Linear(hidden_size, num_outputs)
         self.linear2_ = nn.Linear(hidden_size, num_outputs)
 
@@ -36,22 +37,23 @@ class Policy(nn.Module):
 
 
 class REINFORCE:
-    def __init__(self, hidden_size, num_inputs, num_outputs):
-        self.model = Policy(hidden_size, num_inputs, num_outputs)
-        self.model = self.model.cuda()
-        self.optimizer = optim.Adam(self.model.parameters(), lr=1e-3)
-        self.model.train()
+    def __init__(self, hidden_size, num_inputs, num_outputs, device=torch.device("cuda")):
+        self.policy_model = Policy(hidden_size, num_inputs, num_outputs)
+        self.device = device
+        self.policy_model = self.policy_model.to(device)
+        self.optimizer = optim.Adam(self.policy_model.parameters(), lr=1e-3)
+        self.policy_model.train()
 
     def select_action(self, state):
-        # compute the foveal saliency
-        
-
-        mu, sigma_sq = self.model(Variable(state).cuda())
+        """
+        state: (128,)
+        """
+        mu, sigma_sq = self.policy_model(Variable(state))
         sigma_sq = F.softplus(sigma_sq)
 
-        eps = torch.randn(mu.size())
+        eps = Variable(torch.randn(mu.size())).to(self.device)
         # calculate the probability
-        action = (mu + sigma_sq.sqrt()*Variable(eps).cuda()).data
+        action = (mu + sigma_sq.sqrt()*eps).data
         prob = normal(action, mu, sigma_sq)
         entropy = -0.5*((sigma_sq+2*pi.expand_as(sigma_sq)).log()+1)
 
@@ -63,7 +65,7 @@ class REINFORCE:
         loss = 0
         for i in reversed(range(len(rewards))):
             R = gamma * R + rewards[i]
-            loss = loss - (log_probs[i]*(Variable(R).expand_as(log_probs[i])).cuda()).sum() - (0.0001*entropies[i].cuda()).sum()
+            loss = loss - (log_probs[i]*(Variable(R).expand_as(log_probs[i])).to(self.device)).sum() - (0.0001*entropies[i].to(self.device)).sum()
         loss = loss / len(rewards)
 		
         self.optimizer.zero_grad()

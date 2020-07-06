@@ -1,14 +1,18 @@
+from gym import spaces, core
 import torch
+import torch.nn.functional as F
 from src.saliency_models import MLNet
 from src.TorchFovea import TorchFovea
 
-class FovealVideoEnv:
-    def __init__(self, input_shape, device=torch.device("cuda")):
+
+class DashCamEnv(core.Env):
+    def __init__(self, shape_data, device=torch.device("cuda")):
+
         self.device = device
         # self.observe_model = ResNet_FPN(n_layers=50, preTrained=True)
-        self.observe_model = MLNet(input_shape).to(device)
+        self.observe_model = MLNet(shape_data).to(device)
         self.output_shape = self.observe_model.output_shape
-        self.foveal_model = TorchFovea(input_shape, min(input_shape)/6.0, level=5, factor=2, device=device)
+        self.foveal_model = TorchFovea(shape_data, min(shape_data)/6.0, level=5, factor=2, device=device)
 
 
     def set_data(self, video_data):
@@ -18,7 +22,7 @@ class FovealVideoEnv:
         self.batch_size, self.max_step, height, width = video_data.size(0), video_data.size(1), video_data.size(3), video_data.size(4)
         # set the initial fixation point at the center of image
         self.fixation = torch.Tensor([width / 2.0, height / 2.0]).to(torch.int64).to(device=self.device)
-        # self.reset()
+        self.reset()
 
     def reset(self):
         self.step_id = 0  # step id of the environment
@@ -31,26 +35,45 @@ class FovealVideoEnv:
         """
         frame: (B, C, H, W)
         """ 
+        self.cur_data = frame.clone()
         # foveation
         fovea_image = self.foveal_model.foveate(frame, self.fixation)
         # compute saliency map
-        featmaps = self.observe_model(fovea_image)
+        saliency, bottom = self.observe_model(fovea_image, return_bottom=True)
+        # here we use saliency map as observed states
+        state = saliency * bottom  # (1, 64, 30, 40)
+        max_pool = F.max_pool2d(state, kernel_size=state.size()[2:])
+        avg_pool = F.avg_pool2d(state, kernel_size=state.size()[2:])
+        state = torch.cat([max_pool, avg_pool], dim=1).squeeze_()  # (128,)
+        return state
 
-        # fovea_image = fovea_image.permute(0, 2, 3, 1)  # (B, H, W, C)
-        # foveated_image = fovea_image[0].cpu().detach().numpy()
-        # import cv2
-        # cv2.imwrite("result1.png", foveated_image)
-
-        states = None
-        return states
 
     def get_reward(self):
         pass
 
-    def step(self):
-        obs = self.observe()
-        action = []
-        return obs, action
+    def step(self, action):
+        """ action: (12,)
+        """
+        # actions input 
+        accident = action[:2]
+        fix_ang = action[2:10]
+        fix_amp = action[10:]
+
+        # reward (immediate)
+        reward = self.get_reward()
+
+        self.state = self.get_next_state(self.cur_data, action)
+
+        if self.step_id < self.max_step:
+            done = False
+            info = {}
+        else:
+            done = True
+            info = {}
+
+        self.step_id += 1
+
+        return state, reward, done, info
 
 
 

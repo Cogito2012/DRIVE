@@ -126,7 +126,7 @@ class MLNet(nn.Module):
         torch.nn.init.xavier_normal_(self.prior)
 
 
-    def forward(self, x):
+    def forward(self, x, return_bottom=False):
         results = []
         for ii, model in enumerate(self.features):
             # model = model.to(x.device)
@@ -141,15 +141,18 @@ class MLNet(nn.Module):
         x = self.fddropout(x)
         
         # 64 filters convolution layer
-        x = self.int_conv(x)
+        bottom = self.int_conv(x)
         # 1*1 convolution layer
-        x = self.pre_final_conv(x)
+        x = self.pre_final_conv(bottom)
 
         upscaled_prior = self.bilinearup(self.prior)
 
         # dot product with prior
         x = x * upscaled_prior
         x = torch.nn.functional.relu(x, inplace=True)
+
+        if return_bottom:
+            return x, bottom
         return x
 
     
