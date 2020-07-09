@@ -6,17 +6,23 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 
 class DADALoader(Dataset):
-    def __init__(self, root_path, phase, interval=1, max_frames=-1, transforms=[None, None], params_norm=None, toTensor=True):
+    def __init__(self, root_path, phase, interval=1, max_frames=-1, 
+                       transforms={'image':None, 'focus': None, 'fixpt': None}, 
+                       params_norm=None, group_classes=False, toTensor=True):
         self.root_path = root_path
         self.phase = phase  # 'training', 'testing', 'validation'
         self.interval = interval
         self.max_frames = max_frames
         self.transforms = transforms
         self.params_norm = params_norm
+        self.group_classes = group_classes
         self.toTensor = toTensor
         self.fps = 30
+        self.exclude_accidents = ['52', '53', '54']
 
         self.data_list = self.get_data_list()
+        mapping_file = os.path.join(root_path, 'mapping.txt')
+        self.map_dicts = self.read_mapping(mapping_file)
 
 
     def get_data_list(self):
@@ -26,10 +32,28 @@ class DADALoader(Dataset):
         # loop for each type of accident
         data_list = []
         for accident in sorted(os.listdir(rgb_path)):
+            if accident in self.exclude_accidents:
+                continue
             accident_rgb_path = os.path.join(rgb_path, accident)
             for vid in sorted(os.listdir(accident_rgb_path)):
                 data_list.append(accident + '/' + vid)
         return data_list
+
+
+    def read_mapping(self, map_file):
+        map_dict = {'ID_data':[], 'ID_paper':[], 'participants':[], 'accident':[]}
+        with open(map_file, 'r') as f:
+            for line in f.readlines():
+                strs = line.strip().split(',')
+                map_dict['ID_data'].append(int(strs[0]))
+                map_dict['ID_paper'].append(int(strs[1]))
+                obj_list = strs[2:4]
+                if 'self' in obj_list:
+                    obj_list.remove('self')
+                map_dict['participants'].append(obj_list)
+                map_dict['accident'].append(strs[4])
+        return map_dict
+
 
     def select_frames(self, frame_ids, num=-1):
         if num < 0:
@@ -141,6 +165,8 @@ class DADALoader(Dataset):
         # coordinate path
         coord_file = os.path.join(self.root_path, self.phase, 'coordinate', self.data_list[index] + '_coordinate.txt')
         assert os.path.exists(coord_file), "File does not exist: %s"%(coord_file)
+        # get the class ID
+        clsID = self.get_classID(index, group=self.group_classes)
         coord_data = []
         with open(coord_file, 'r') as f:
             all_lines = f.readlines()
@@ -148,9 +174,36 @@ class DADALoader(Dataset):
                 line = all_lines[fid-1]
                 x_coord = int(line.strip().split(',')[0])
                 y_coord = int(line.strip().split(',')[1])
-                coord_data.append([x_coord, y_coord])
+                cls_label = clsID if x_coord > 0 and y_coord > 0 else 0
+                coord_data.append([x_coord, y_coord, cls_label])
         coord_data = np.array(coord_data, dtype=np.float32)
         return coord_data
+
+
+    def get_classID(self, index, group=False):
+        # get accident type in dataset
+        atype = self.data_list[index].split('/')[0]
+        # map it to the index of accidents in DADA-2000 paper
+        idx = self.map_dicts['ID_data'].index(int(atype))
+        clsID_paper = self.map_dicts['ID_paper'][idx]
+        if group:
+            if clsID_paper >= 1 and clsID_paper < 7:
+                clsID = 1  # ego dynamic person-centric
+            elif clsID_paper >= 7 and clsID_paper < 13:
+                clsID = 2  # ego dynamic vehicle-centric
+            elif clsID_paper >= 13 and clsID_paper < 19:
+                clsID = 3  # ego static road-centric
+            elif clsID_paper >= 19 and clsID_paper < 37:
+                clsID = 4  # nonego static road-centric
+            elif clsID_paper >= 37 and clsID_paper < 52:
+                clsID = 5  # nonego dynamic vehicle-centric
+            elif clsID_paper >= 52 and clsID_paper < 61:
+                clsID = 6  # nonego dynamic person-centric
+            else:
+                clsID = 3  # accident 51(61)
+        else:
+            clsID = clsID_paper
+        return clsID
 
 
     def gather_info(self, index, video_data):
@@ -191,6 +244,8 @@ class DADALoader(Dataset):
         
         # read coordinates
         coord_data = self.read_coord_arrays(frame_ids, index)
+        if self.transforms['fixpt'] is not None:
+            coord_data[:, :2] = self.transforms['fixpt'](coord_data[:, :2])
 
         if self.toTensor:
             video_data = torch.Tensor(video_data)
@@ -229,12 +284,28 @@ class PreFetcher():
         self.preload()
         return next_video_data, next_focus_data, next_coord_data
 
+
+def setup_dataloader(input_shape, output_shape):
+
+    transform_image = transforms.Compose([ProcessImages(input_shape)])
+    transform_focus = transforms.Compose([ProcessImages(output_shape)])
+    params_norm = {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}
+    train_data = DADALoader(args.data_path, 'training', interval=args.frame_interval, max_frames=args.max_frames, 
+                            transforms={'image':transform_image, 'focus':transform_focus}, params_norm=params_norm, group_classes=True)
+    traindata_loader = DataLoader(dataset=train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    eval_data = DADALoader(args.data_path, 'validation', interval=args.frame_interval, max_frames=args.max_frames, 
+                            transforms={'image':transform_image, 'focus':transform_focus}, params_norm=params_norm, group_classes=True)
+    evaldata_loader = DataLoader(dataset=eval_data, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+    print("# train set: %d, eval set: %d"%(len(train_data), len(eval_data)))
+    return traindata_loader, evaldata_loader
+
      
 if __name__ == '__main__':
     from torch.utils.data import DataLoader
     from data_transform import ProcessImages
     import argparse, time
     from tqdm import tqdm
+    import matplotlib.pyplot as plt
 
     parser = argparse.ArgumentParser(description='PyTorch REINFORCE implementation')
     parser.add_argument('--data_path', default='./data/DADA-2000',
@@ -249,6 +320,8 @@ if __name__ == '__main__':
                         help='Training or testing phase.')
     parser.add_argument('--input_shape', nargs='+', type=int, default=[480, 640],
                         help='The input shape of images. default: [r=480, c=640]')
+    parser.add_argument('--num_workers', type=int, default=0, 
+                        help='How many sub-workers to load dataset. Default: 0')
     args = parser.parse_args()
 
     seed = 123
@@ -256,19 +329,9 @@ if __name__ == '__main__':
     torch.manual_seed(seed)
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
-    transform_image = transforms.Compose([ProcessImages(args.input_shape)])
-    transform_focus = None
-    params_norm = {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}
-
-    train_data = DADALoader(args.data_path, 'training', interval=args.frame_interval, max_frames=args.max_frames,
-                            transforms={'image':transform_image, 'focus':transform_focus}, params_norm=params_norm)
-
-    transforms = transforms.Compose([ProcessImages(args.input_shape)])
-    params_norm = {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}
-    train_data = DADALoader(args.data_path, 'training', interval=args.frame_interval, max_frames=args.max_frames,
-                            transforms=transforms, params_norm=params_norm, toTensor=False)
-    traindata_loader = DataLoader(dataset=train_data, batch_size=args.batch_size, shuffle=True)
-    print("# train set: %d"%(len(train_data)))
+    # initialize dataset
+    output_shape = (np.array(args.input_shape) / 8).astype(np.int64)
+    traindata_loader, evaldata_loader = setup_dataloader(args.input_shape, output_shape)
 
     # prefetcher = PreFetcher(traindata_loader)
     # video_data, focus_data, coord_data = prefetcher.next()
@@ -279,11 +342,20 @@ if __name__ == '__main__':
     #     print(iteration)
 
     num_frames = []
+    num_clsses = 6
+    cls_stat = np.zeros((num_clsses,), dtype=np.int64)
     t_start = time.time()
     for i, (video_data, focus_data, coord_data) in enumerate(traindata_loader):
-        print("batch: %d / %d, num_frames = %d, time=%.3f"%(i, len(traindata_loader), video_data.shape[1], time.time() - t_start))
+        clsID = int(coord_data[0, :, 2].unique()[1])
+        print("batch: %d / %d, num_frames = %d, cls = %d, time=%.3f"%(i, len(traindata_loader), video_data.shape[1], clsID, time.time() - t_start))
+        cls_stat[clsID-1] += 1
         num_frames.append(video_data.shape[1])
         t_start = time.time()
 
-    np.save('msg_data', num_frames)
+    np.savez('msg_data', frames=num_frames, stats=cls_stat)
 
+    fig, ax = plt.subplots()
+    plt.bar(range(num_clsses), cls_stat)
+    plt.xticks(range(num_clsses), ('ego_person', 'ego_vehicle', 'ego_road', 'nonego_road', 'nonego_vehicle', 'nonego_person'))
+    plt.title('Number of videos for each category')
+    plt.savefig('stat_six.png')

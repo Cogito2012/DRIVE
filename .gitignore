@@ -141,3 +141,6 @@ vis_data/
 *.out
 output/*
 metrics/saliency/code_forMetrics
+*.npz
+*.npy
+*.pkl

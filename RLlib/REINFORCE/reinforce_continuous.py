@@ -24,14 +24,14 @@ class Policy(nn.Module):
 
         self.linear1 = nn.Linear(num_inputs, hidden_size)
         # predict orientation
-        self.linear2 = nn.Linear(hidden_size, num_outputs)
-        self.linear2_ = nn.Linear(hidden_size, num_outputs)
+        self.linear_mu = nn.Linear(hidden_size, num_outputs)
+        self.linear_sigma = nn.Linear(hidden_size, num_outputs)
 
     def forward(self, inputs):
         x = inputs
         x = F.relu(self.linear1(x))
-        mu = self.linear2(x)
-        sigma_sq = self.linear2_(x)
+        mu = torch.tanh(self.linear_mu(x))  # (-1, 1)
+        sigma_sq = F.softplus(self.linear_sigma(x)) + 1e-6
 
         return mu, sigma_sq
 
@@ -46,19 +46,23 @@ class REINFORCE:
 
     def select_action(self, state):
         """
-        state: (128,)
+        state: (1, 128)
         """
         mu, sigma_sq = self.policy_model(Variable(state))
-        sigma_sq = F.softplus(sigma_sq)
 
         eps = Variable(torch.randn(mu.size())).to(self.device)
         # calculate the probability
         action = (mu + sigma_sq.sqrt()*eps).data
+        # clip the action to (-1, 1)
+        action[:, :2] = torch.clamp(action[:, :2], -1, 1)
+        # action[2:] = torch.softmax(action[2:], dim=0)
+
         prob = normal(action, mu, sigma_sq)
         entropy = -0.5*((sigma_sq+2*pi.expand_as(sigma_sq)).log()+1)
-
         log_prob = prob.log()
+
         return action, log_prob, entropy
+
 
     def update_parameters(self, rewards, log_probs, entropies, gamma):
         R = torch.zeros(1, 1)

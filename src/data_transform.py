@@ -49,6 +49,40 @@ def padding(img, shape_r=480, shape_c=640, channels=3):
     return img_padded
 
 
+def padding_point(point, img_shape, shape_r=480, shape_c=640):
+    """
+    img_shape: [height, width]
+    """
+    def scale_point(point, img_shape, rows, cols):
+        # compute the scale factor
+        factor_scale_r = rows / img_shape[0]
+        factor_scale_c = cols / img_shape[1]
+        r = int(np.round(point[1] * factor_scale_r))
+        c = int(np.round(point[0] * factor_scale_c))
+        if r == rows:
+            r -= 1
+        if c == cols:
+            c -= 1
+        return r, c
+        
+    rows_rate = img_shape[0] / shape_r
+    cols_rate = img_shape[1] / shape_c
+    if rows_rate > cols_rate:
+        new_cols = (img_shape[1] * shape_r) // img_shape[0]
+        # scaling
+        r, c = scale_point(point, img_shape, rows=shape_r, cols=new_cols)
+        # shifting
+        c = c + (shape_c - new_cols) // 2
+    else:
+        new_rows = (img_shape[0] * shape_c) // img_shape[1]
+        # scaling
+        r, c = scale_point(point, img_shape, rows=new_rows, cols=shape_c)
+        # shifting
+        r = r + (shape_r - new_rows) // 2
+    new_point = np.array([c, r], dtype=np.int64)  # (x, y)
+    return new_point
+
+
 class ProcessImages(object):
     """Pre-process images with padded resize operation, and normalize
     Args:
@@ -77,6 +111,33 @@ class ProcessImages(object):
         ims /= 255.0
         ims = np.rollaxis(ims, 3, 1)  # (t, c, h, w)
         return ims
+
+    def __repr__(self):
+        return self.__class__.__name__ + '(input_shape={0})'.format(self.input_shape)
+
+
+class ProcessFixations(object):
+    """Pre-process fixation points to accord with the pre-processed images
+    Args:
+        input_shape: (shape_r, shape_c)
+    """
+    def __init__(self, input_shape, img_shape):
+        if isinstance(input_shape, numbers.Number):
+            self.input_shape = (int(input_shape), int(input_shape))
+        else:
+            self.input_shape = input_shape
+        self.img_shape = img_shape
+
+    def __call__(self, coords):
+        """
+        coords: fixation points, (L, 2) x, y
+        """
+        shape_r, shape_c = self.input_shape
+        new_coords = np.zeros_like(coords, dtype=np.int64)
+        for i, fixpt in enumerate(coords):
+            if fixpt[0] > 0 and fixpt[1] > 0:
+                new_coords[i] = padding_point(fixpt, self.img_shape, shape_r, shape_c)
+        return new_coords
 
     def __repr__(self):
         return self.__class__.__name__ + '(input_shape={0})'.format(self.input_shape)

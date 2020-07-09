@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 
 from src.DADALoader import DADALoader
-from src.data_transform import ProcessImages
+from src.data_transform import ProcessImages, ProcessFixations
 
 
 def parse_main_args():
@@ -70,14 +70,18 @@ def set_deterministic(seed):
 
 def setup_dataloader(input_shape, output_shape):
 
-    transform_image = transforms.Compose([ProcessImages(input_shape)])
-    transform_focus = transforms.Compose([ProcessImages(output_shape)])
+    img_shape = [660, 1584]
+    transform_dict = {'image': transforms.Compose([ProcessImages(input_shape)]),
+                      'focus': transforms.Compose([ProcessImages(output_shape)]), 
+                      'fixpt': transforms.Compose([ProcessFixations(input_shape, img_shape)])}
     params_norm = {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}
+    # training dataset
     train_data = DADALoader(args.data_path, 'training', interval=args.frame_interval, max_frames=args.max_frames, 
-                            transforms={'image':transform_image, 'focus':transform_focus}, params_norm=params_norm)
+                            transforms=transform_dict, params_norm=params_norm, group_classes=True)
     traindata_loader = DataLoader(dataset=train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
+    # validataion dataset
     eval_data = DADALoader(args.data_path, 'validation', interval=args.frame_interval, max_frames=args.max_frames, 
-                            transforms={'image':transform_image, 'focus':transform_focus}, params_norm=params_norm)
+                            transforms=transform_dict, params_norm=params_norm, group_classes=True)
     evaldata_loader = DataLoader(dataset=eval_data, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
     print("# train set: %d, eval set: %d"%(len(train_data), len(eval_data)))
     return traindata_loader, evaldata_loader
@@ -86,7 +90,6 @@ def setup_dataloader(input_shape, output_shape):
 def train():
     # initilize environment
     env = DashCamEnv(args.input_shape, device=device)
-    # env.seed(args.seed)
 
     # prepare output directory
     ckpt_dir = os.path.join(args.output, 'checkpoints')
@@ -95,7 +98,7 @@ def train():
 
     # initialize agents
     dim_observe = 128
-    dim_action = 12
+    dim_action = 8
     agent = REINFORCE(args.hidden_size, dim_observe, dim_action, device=device)
 
     # initialize dataset
@@ -107,15 +110,13 @@ def train():
         rewards = []
         for i, (video_data, focus_data, coord_data) in enumerate(traindata_loader):  # (B, T, H, W, C)
             print("batch: %d / %d"%(i, len(traindata_loader)))
-            env.set_data(video_data)
+            env.set_data(video_data, focus_data, coord_data, fps=30/args.frame_interval)
 
             # run each time step
             for t in range(video_data.size(1)):
                 frame_data = video_data[:, t].to(device, dtype=torch.float)  # (B, C, H, W)
-                state = env.observe(frame_data)  # (1, 64, 30, 40)
+                state = env.observe(frame_data)  # (1, 128)
                 action, log_prob, entropy = agent.select_action(state)
-                action = action.cpu()
-
                 next_state, reward, done, _ = env.step(action)
 
                 entropies.append(entropy)
