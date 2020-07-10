@@ -3,18 +3,33 @@ import torch
 import torch.nn.functional as F
 from src.saliency_models import MLNet
 from src.TorchFovea import TorchFovea
+import os
 
 
 class DashCamEnv(core.Env):
     def __init__(self, shape_data, device=torch.device("cuda")):
 
         self.device = device
-        self.observe_model = MLNet(shape_data).to(device)
+        self.observe_model = MLNet(shape_data)
         self.output_shape = self.observe_model.output_shape
         self.foveal_model = TorchFovea(shape_data, min(shape_data)/6.0, level=5, factor=2, device=device)
         self.cls_loss = torch.nn.CrossEntropyLoss()
-        self.mse_loss = torch.nn.MSELoss()
         self.image_size = [660, 1584]
+        self.dim_state = 128
+        self.dim_action = 8
+
+
+    def set_model(self, pretrained=False, weight_file=None):
+        if pretrained and weight_file is not None:
+            # load model weight file
+            assert os.path.exists(weight_file), "Checkpoint directory does not exist! %s"%(weight_file)
+            ckpt = torch.load(weight_file)
+            self.observe_model.load_state_dict(ckpt['model'])
+            self.observe_model.to(self.device)
+            self.observe_model.eval()
+        else:
+            self.observe_model.to(self.device)
+            self.observe_model.train()
 
 
     def set_data(self, video_data, focus_data, coord_data, fps=30):
@@ -23,34 +38,37 @@ class DashCamEnv(core.Env):
             coord_data: (B, T, 3), (x, y, cls)
         """ 
         assert video_data.size(0) == 1, "Only batch size == 1 is allowed!"
+        # the following attributes are unchanged or ground truth of environment for an entire video
         self.video_data = torch.Tensor(video_data).to(self.device)
         self.focus_data = torch.Tensor(focus_data).to(self.device)
         self.coord_data = torch.Tensor(coord_data).to(self.device)
         self.batch_size, self.max_step, self.height, self.width = video_data.size(0), video_data.size(1), video_data.size(3), video_data.size(4)
-        # set the initial fixation point at the center of image
         fix_ctr = torch.Tensor([self.width / 2.0, self.height / 2.0]).to(torch.float32).to(device=self.device)
         self.fixations = torch.where(self.coord_data[0, :, :2] > 0, self.coord_data[0, :, :2], fix_ctr.expand_as(self.coord_data[0, :, :2]))
         self.clsID = self.coord_data[0, :, 2].unique()[1].long() - 1  # class ID starts from 0 to 5
-        self.begin_accident = torch.nonzero(self.coord_data[0, :, 2] > 0)[0, 0] / float(fps)
+        self.begin_accident = torch.clamp(torch.nonzero(self.coord_data[0, :, 2] > 0)[0, 0] / float(fps), min=1)
         self.fps = fps
-        self.reset()
+        # reset the agent to the initial states
+        state = self.reset()
+        return state
 
 
     def reset(self):
         self.cur_step = 0  # step id of the environment
-        self.init_fixation = torch.Tensor([self.width / 2.0, self.height / 2.0]).to(torch.int64).to(device=self.device)
-        # self.fixations = torch.zeros((self.batch_size, 2), dtype=torch.long, device=self.device)  # (B, 2)
-        # self.status = torch.zeros(self.batch_size, dtype=torch.uint8, device=self.device)  # (B,) done or not
-        # self.is_active = torch.ones(self.batch_size, dtype=torch.uint8,  device=self.device)
+        self.next_fixation = None
+        # observe the first frame
+        frame_data = self.video_data[:, self.cur_step]  # (B, C, H, W)
+        init_fixation = torch.Tensor([self.width / 2.0, self.height / 2.0]).to(torch.int64).to(device=self.device)
+        self.cur_state = self.observe(frame_data, init_fixation)
+        return self.cur_state
 
 
-    def observe(self, frame):
+    def observe(self, frame, fixation):
         """
         frame: (B, C, H, W)
         """ 
-        self.cur_data = frame.clone()
         # foveation
-        fovea_image = self.foveal_model.foveate(frame, self.init_fixation)
+        fovea_image = self.foveal_model.foveate(frame, fixation)
         # compute saliency map
         saliency, bottom = self.observe_model(fovea_image, return_bottom=True)
         # here we use saliency map as observed states
@@ -72,9 +90,9 @@ class DashCamEnv(core.Env):
            accident_pred: (1, 6)
         """
         # correctness reward (classification)
-        accident_reward = -1.0 * self.cls_loss(accident_pred, self.clsID.unsqueeze(0))
+        accident_reward = -0.1 * self.cls_loss(accident_pred, self.clsID.unsqueeze(0))
         # attentiveness reward (mse of fixations)
-        fixation_reward = -1.0 * (self.norm_fix(fixation_pred) - self.norm_fix(self.next_fixation)).pow(2).sum().sqrt()
+        fixation_reward = -1.0 * (self.norm_fix(fixation_pred) - self.norm_fix(self.fixations[self.cur_step + 1])).pow(2).sum().sqrt()
         # score
         score = torch.max(F.softmax(accident_pred, dim=1), dim=1)[0]
         if score > 0.5:
@@ -109,25 +127,27 @@ class DashCamEnv(core.Env):
         """ action: (1, 8)
         """
         # actions input, range from -1 to 1
-        fixation_pred = self.pred_to_point(action[:, 0], action[:, 1])
-        # fixation_pred = torch.cat([self.width / 2.0 * (1 + action[:, 0]),
-        #                            self.height / 2.0 * (1 - action[:, 1])])   # (x1, y1)
+        self.next_fixation = self.pred_to_point(action[:, 0], action[:, 1])
         accident_pred = action[:, 2:]
-        # reward (immediate)
-        reward = self.get_reward(fixation_pred, accident_pred)
-
-        self.state = self.get_next_state(self.cur_data, fixation_pred)
-
-        if self.step_id < self.max_step:
+        
+        if self.cur_step < self.max_step - 1:
+            # reward (immediate)
+            cur_reward = self.get_reward(self.next_fixation, accident_pred)
+            # next state
+            frame_next = self.video_data[:, self.cur_step + 1]  # (B, C, H, W)
+            next_state = self.observe(frame_next, self.next_fixation)
             done = False
             info = {}
         else:
+            cur_reward = torch.zeros([]).to(self.device)
+            next_state = self.cur_state.clone()
             done = True
             info = {}
 
-        self.step_id += 1
+        self.cur_step += 1
+        self.cur_state = next_state.clone()
 
-        return state, reward, done, info
+        return next_state, cur_reward, done, info
 
 
 

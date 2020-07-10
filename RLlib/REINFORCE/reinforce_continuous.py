@@ -42,7 +42,7 @@ class REINFORCE:
         self.device = device
         self.policy_model = self.policy_model.to(device)
         self.optimizer = optim.Adam(self.policy_model.parameters(), lr=1e-3)
-        self.policy_model.train()
+        
 
     def select_action(self, state):
         """
@@ -69,10 +69,11 @@ class REINFORCE:
         loss = 0
         for i in reversed(range(len(rewards))):
             R = gamma * R + rewards[i]
-            loss = loss - (log_probs[i]*(Variable(R).expand_as(log_probs[i])).to(self.device)).sum() - (0.0001*entropies[i].to(self.device)).sum()
+            loss = loss - (log_probs[i]*(Variable(R).expand_as(log_probs[i])).to(self.device)).sum() - (0.0001*entropies[i]).sum()
         loss = loss / len(rewards)
 		
         self.optimizer.zero_grad()
         loss.backward()
-        utils.clip_grad_norm(self.model.parameters(), 40)
+        utils.clip_grad_norm_(self.policy_model.parameters(), 40)
         self.optimizer.step()
+        return loss
