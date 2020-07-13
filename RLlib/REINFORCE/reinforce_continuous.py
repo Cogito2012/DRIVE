@@ -30,10 +30,12 @@ class Policy(nn.Module):
     def forward(self, inputs):
         x = inputs
         x = F.relu(self.linear1(x))
-        mu = torch.tanh(self.linear_mu(x))  # (-1, 1)
-        sigma_sq = F.softplus(self.linear_sigma(x)) + 1e-6
+        x = self.linear_mu(x)
+        mu_fix = torch.tanh(x[:, :2])  # (-1, 1)
+        mu_score = x[:, 2:]
+        # sigma_sq = F.softplus(self.linear_sigma(x)) + 1e-6
 
-        return mu, sigma_sq
+        return mu_fix, mu_score
 
 
 class REINFORCE:
@@ -48,28 +50,32 @@ class REINFORCE:
         """
         state: (1, 128)
         """
-        mu, sigma_sq = self.policy_model(Variable(state))
+        fix_scale, accident_score = self.policy_model(Variable(state))
+        mu = torch.cat([fix_scale, accident_score], dim=1)
+        sigma_sq = Variable(torch.zeros_like(mu).to(self.device) + 1e-6)
 
         eps = Variable(torch.randn(mu.size())).to(self.device)
         # calculate the probability
         action = (mu + sigma_sq.sqrt()*eps).data
-        # clip the action to (-1, 1)
-        action[:, :2] = torch.clamp(action[:, :2], -1, 1)
-        # action[2:] = torch.softmax(action[2:], dim=0)
+        # # clip the action to (-1, 1)
+        # action[:, :2] = torch.clamp(action[:, :2], -1, 1)
+        # # action[2:] = torch.softmax(action[2:], dim=0)
 
         prob = normal(action, mu, sigma_sq)
         entropy = -0.5*((sigma_sq+2*pi.expand_as(sigma_sq)).log()+1)
         log_prob = prob.log()
+        # entropy = torch.zeros_like(action).to(self.device)
+        # log_prob = torch.ones_like(action).to(self.device)
 
         return action, log_prob, entropy
 
 
-    def update_parameters(self, rewards, log_probs, entropies, gamma):
+    def update_parameters(self, rewards, tta_losses, log_probs, entropies, gamma, alpha):
         R = torch.zeros(1, 1)
         loss = 0
         for i in reversed(range(len(rewards))):
             R = gamma * R + rewards[i]
-            loss = loss - (log_probs[i]*(Variable(R).expand_as(log_probs[i])).to(self.device)).sum() - (0.0001*entropies[i]).sum()
+            loss = loss - (log_probs[i]*(Variable(R).expand_as(log_probs[i])).to(self.device)).sum() - (alpha * entropies[i]).sum() + 0.01 * tta_losses[i]
         loss = loss / len(rewards)
 		
         self.optimizer.zero_grad()

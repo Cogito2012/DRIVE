@@ -8,14 +8,14 @@ from torchvision import transforms
 class DADALoader(Dataset):
     def __init__(self, root_path, phase, interval=1, max_frames=-1, 
                        transforms={'image':None, 'focus': None, 'fixpt': None}, 
-                       params_norm=None, group_classes=False, toTensor=True):
+                       params_norm=None, binary_cls=False, toTensor=True):
         self.root_path = root_path
         self.phase = phase  # 'training', 'testing', 'validation'
         self.interval = interval
         self.max_frames = max_frames
         self.transforms = transforms
         self.params_norm = params_norm
-        self.group_classes = group_classes
+        self.binary_cls = binary_cls
         self.toTensor = toTensor
         self.fps = 30
         self.exclude_accidents = ['52', '53', '54']
@@ -166,7 +166,7 @@ class DADALoader(Dataset):
         coord_file = os.path.join(self.root_path, self.phase, 'coordinate', self.data_list[index] + '_coordinate.txt')
         assert os.path.exists(coord_file), "File does not exist: %s"%(coord_file)
         # get the class ID
-        clsID = self.get_classID(index, group=self.group_classes)
+        clsID = self.get_classID(index, binary_class=self.binary_cls)
         coord_data = []
         with open(coord_file, 'r') as f:
             all_lines = f.readlines()
@@ -180,29 +180,36 @@ class DADALoader(Dataset):
         return coord_data
 
 
-    def get_classID(self, index, group=False):
+    def get_classID(self, index, binary_class=False):
         # get accident type in dataset
         atype = self.data_list[index].split('/')[0]
         # map it to the index of accidents in DADA-2000 paper
         idx = self.map_dicts['ID_data'].index(int(atype))
         clsID_paper = self.map_dicts['ID_paper'][idx]
-        if group:
-            if clsID_paper >= 1 and clsID_paper < 7:
-                clsID = 1  # ego dynamic person-centric
-            elif clsID_paper >= 7 and clsID_paper < 13:
-                clsID = 2  # ego dynamic vehicle-centric
-            elif clsID_paper >= 13 and clsID_paper < 19:
-                clsID = 3  # ego static road-centric
-            elif clsID_paper >= 19 and clsID_paper < 37:
-                clsID = 4  # nonego static road-centric
-            elif clsID_paper >= 37 and clsID_paper < 52:
-                clsID = 5  # nonego dynamic vehicle-centric
-            elif clsID_paper >= 52 and clsID_paper < 61:
-                clsID = 6  # nonego dynamic person-centric
+        if binary_class:
+            if clsID_paper < 19 or clsID_paper > 60:
+                clsID = 2  # ego-car involved
             else:
-                clsID = 3  # accident 51(61)
+                clsID = 1  # ego-car uninvolved
         else:
             clsID = clsID_paper
+        # if group:
+        #     if clsID_paper >= 1 and clsID_paper < 7:
+        #         clsID = 1  # ego dynamic person-centric
+        #     elif clsID_paper >= 7 and clsID_paper < 13:
+        #         clsID = 2  # ego dynamic vehicle-centric
+        #     elif clsID_paper >= 13 and clsID_paper < 19:
+        #         clsID = 3  # ego static road-centric
+        #     elif clsID_paper >= 19 and clsID_paper < 37:
+        #         clsID = 4  # nonego static road-centric
+        #     elif clsID_paper >= 37 and clsID_paper < 52:
+        #         clsID = 5  # nonego dynamic vehicle-centric
+        #     elif clsID_paper >= 52 and clsID_paper < 61:
+        #         clsID = 6  # nonego dynamic person-centric
+        #     else:
+        #         clsID = 3  # accident 51(61)
+        # else:
+        #     clsID = clsID_paper
         return clsID
 
 
@@ -291,10 +298,10 @@ def setup_dataloader(input_shape, output_shape):
     transform_focus = transforms.Compose([ProcessImages(output_shape)])
     params_norm = {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}
     train_data = DADALoader(args.data_path, 'training', interval=args.frame_interval, max_frames=args.max_frames, 
-                            transforms={'image':transform_image, 'focus':transform_focus}, params_norm=params_norm, group_classes=True)
+                            transforms={'image':transform_image, 'focus':transform_focus}, params_norm=params_norm, binary_cls=True)
     traindata_loader = DataLoader(dataset=train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     eval_data = DADALoader(args.data_path, 'validation', interval=args.frame_interval, max_frames=args.max_frames, 
-                            transforms={'image':transform_image, 'focus':transform_focus}, params_norm=params_norm, group_classes=True)
+                            transforms={'image':transform_image, 'focus':transform_focus}, params_norm=params_norm, binary_cls=True)
     evaldata_loader = DataLoader(dataset=eval_data, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
     print("# train set: %d, eval set: %d"%(len(train_data), len(eval_data)))
     return traindata_loader, evaldata_loader

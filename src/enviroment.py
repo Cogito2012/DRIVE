@@ -7,7 +7,7 @@ import os
 
 
 class DashCamEnv(core.Env):
-    def __init__(self, shape_data, device=torch.device("cuda")):
+    def __init__(self, shape_data, dim_action, dim_state=128, device=torch.device("cuda")):
 
         self.device = device
         self.observe_model = MLNet(shape_data)
@@ -15,8 +15,9 @@ class DashCamEnv(core.Env):
         self.foveal_model = TorchFovea(shape_data, min(shape_data)/6.0, level=5, factor=2, device=device)
         self.cls_loss = torch.nn.CrossEntropyLoss()
         self.image_size = [660, 1584]
-        self.dim_state = 128
-        self.dim_action = 8
+        self.dim_state = dim_state
+        self.dim_action = dim_action
+        self.ce_loss = torch.nn.CrossEntropyLoss(reduction='none')
 
 
     def set_model(self, pretrained=False, weight_file=None):
@@ -85,22 +86,48 @@ class DashCamEnv(core.Env):
         fix_norm[1] /= self.height
         return fix_norm
 
+
+    def _exp_loss(self, pred, target, time, toa):
+        '''
+        :param pred:
+        :param target: onehot codings for binary classification
+        :param time:
+        :param toa:
+        :return:
+        '''
+        # positive example (exp_loss)
+        target_cls = target[:, 1]
+        target_cls = target_cls.to(torch.long)
+        penalty = -torch.max(torch.zeros_like(toa).to(toa.device, pred.dtype), toa.to(pred.dtype) - time - 1)
+        pos_loss = -torch.mul(torch.exp(penalty), -self.ce_loss(pred, target_cls))
+        # negative example
+        neg_loss = self.ce_loss(pred, target_cls)
+        loss = torch.mean(torch.add(torch.mul(pos_loss, target[:, 1]), torch.mul(neg_loss, target[:, 0])))
+        return loss
+
+
     def get_reward(self, fixation_pred, accident_pred):
         """fixation_pred: (2,)
-           accident_pred: (1, 6)
+           accident_pred: (1, 1)
         """
-        # correctness reward (classification)
-        accident_reward = -0.1 * self.cls_loss(accident_pred, self.clsID.unsqueeze(0))
+        target = torch.where(self.clsID > 0, torch.Tensor([[0, 1]]).to(self.device), torch.Tensor([[1, 0]]).to(self.device))
+        cls_loss = self._exp_loss(accident_pred, target, self.cur_step / self.fps, self.begin_accident)
+
+        # # correctness reward (classification)
+        # accident_reward = -0.1 * self.cls_loss(accident_pred, self.clsID.unsqueeze(0))
         # attentiveness reward (mse of fixations)
-        fixation_reward = -1.0 * (self.norm_fix(fixation_pred) - self.norm_fix(self.fixations[self.cur_step + 1])).pow(2).sum().sqrt()
+        fixation_reward = (-1.0 * (self.norm_fix(fixation_pred) - self.norm_fix(self.fixations[self.cur_step + 1])).pow(2).sum()).exp()
         # score
-        score = torch.max(F.softmax(accident_pred, dim=1), dim=1)[0]
-        if score > 0.5:
+        # score = torch.max(F.softmax(accident_pred, dim=1), dim=1)[0]
+        score = F.softmax(accident_pred, dim=1)[0, 1]
+        if self.clsID > 0 and score > 0.5:  # true positive
             tta_reward = 1.0 / (self.begin_accident.exp() - 1.0) * (torch.clamp(self.begin_accident - self.cur_step / self.fps, min=0).exp() - 1.0)
         else:
-            tta_reward = 0
-        reward = fixation_reward + accident_reward + tta_reward
-        return reward
+            tta_reward = torch.zeros([]).to(self.device)
+        # reward = fixation_reward + accident_reward + tta_reward
+        reward = fixation_reward + tta_reward
+
+        return reward, cls_loss
 
 
     def pred_to_point(self, scale_x, scale_y):
@@ -124,7 +151,7 @@ class DashCamEnv(core.Env):
 
 
     def step(self, action):
-        """ action: (1, 8)
+        """ action: (1, 4)
         """
         # actions input, range from -1 to 1
         self.next_fixation = self.pred_to_point(action[:, 0], action[:, 1])
@@ -132,7 +159,7 @@ class DashCamEnv(core.Env):
         
         if self.cur_step < self.max_step - 1:
             # reward (immediate)
-            cur_reward = self.get_reward(self.next_fixation, accident_pred)
+            cur_reward, cur_loss = self.get_reward(self.next_fixation, accident_pred)
             # next state
             frame_next = self.video_data[:, self.cur_step + 1]  # (B, C, H, W)
             next_state = self.observe(frame_next, self.next_fixation)
@@ -140,6 +167,7 @@ class DashCamEnv(core.Env):
             info = {}
         else:
             cur_reward = torch.zeros([]).to(self.device)
+            cur_loss = torch.zeros([]).to(self.device)
             next_state = self.cur_state.clone()
             done = True
             info = {}
@@ -147,7 +175,7 @@ class DashCamEnv(core.Env):
         self.cur_step += 1
         self.cur_state = next_state.clone()
 
-        return next_state, cur_reward, done, info
+        return next_state, cur_reward, cur_loss, done, info
 
 
 

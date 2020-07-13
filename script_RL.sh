@@ -17,6 +17,7 @@ exec &> >(tee -a "$LOG")
 echo Logging output to "$LOG"
 
 # run training
-CUDA_VISIBLE_DEVICES=$GPU_IDS python main_reinforce.py
+# CUDA_VISIBLE_DEVICES=$GPU_IDS python main_reinforce.py --binary_cls
+CUDA_VISIBLE_DEVICES=$GPU_IDS python main_reinforce.py --binary_cls --alpha 0 --output ./output/REINFORCE_alpha0
 
 echo "Done!"
