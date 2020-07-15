@@ -124,8 +124,8 @@ class DeterministicPolicy(nn.Module):
 
         # action rescaling
         if action_space is None:
-            self.action_scale = 1.
-            self.action_bias = 0.
+            self.action_scale = torch.tensor(1.)
+            self.action_bias = torch.tensor(0.)
         else:
             self.action_scale = torch.FloatTensor(
                 (action_space.high - action_space.low) / 2.)

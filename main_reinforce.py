@@ -50,7 +50,7 @@ def parse_main_args():
                         help='number of epoches (default: 50)')
     parser.add_argument('--hidden_size', type=int, default=128, metavar='N',
                         help='number of episodes (default: 128)')
-    parser.add_argument('--output', default='./output/REINFORCE',
+    parser.add_argument('--output', default='./output/REINFORCE-TEMP',
                         help='Directory of the output. ')
     args = parser.parse_args()
     return args
@@ -88,7 +88,7 @@ def setup_dataloader(input_shape, output_shape):
 
 def train():
     # initilize environment
-    env = DashCamEnv(args.input_shape, args.dim_action, device=device)
+    env = DashCamEnv(args.input_shape, args.dim_action, fps=30/args.frame_interval, device=device)
     env.set_model(pretrained=True, weight_file=args.env_model)
 
     # prepare output directory
@@ -109,14 +109,14 @@ def train():
     for e in range(args.num_epoch):
         # we define each episode as the entire database
         for i, (video_data, focus_data, coord_data) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), desc='Epoch: %d / %d'%(e + 1, args.num_epoch)):  # (B, T, H, W, C)
-            state = env.set_data(video_data, focus_data, coord_data, fps=30/args.frame_interval)
+            state = env.set_data(video_data, focus_data, coord_data)
             entropies, log_probs, rewards, cls_losses = [], [], [], []
             # run each time step
             for t in range(env.max_step):
                 # select action
                 action, log_prob, entropy = agent.select_action(state)
                 # state transition
-                state, reward, cls_loss, done, _ = env.step(action)
+                state, reward, cls_loss, done, _ = env.step(action, with_loss=True)
                 
                 # gather info
                 entropies.append(entropy)

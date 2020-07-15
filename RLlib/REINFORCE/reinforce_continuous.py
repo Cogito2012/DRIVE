@@ -67,7 +67,7 @@ class REINFORCE:
         # entropy = torch.zeros_like(action).to(self.device)
         # log_prob = torch.ones_like(action).to(self.device)
 
-        return action, log_prob, entropy
+        return action[0], log_prob[0], entropy[0]
 
 
     def update_parameters(self, rewards, tta_losses, log_probs, entropies, gamma, alpha):
