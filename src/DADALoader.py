@@ -292,24 +292,26 @@ class PreFetcher():
         return next_video_data, next_focus_data, next_coord_data
 
 
-def setup_dataloader(input_shape, output_shape):
-
-    transform_image = transforms.Compose([ProcessImages(input_shape)])
-    transform_focus = transforms.Compose([ProcessImages(output_shape)])
+def setup_dataloader(cfg):
+    transform_dict = {'image': transforms.Compose([ProcessImages(cfg.input_shape)]),
+                      'focus': transforms.Compose([ProcessImages(cfg.output_shape)]), 
+                      'fixpt': transforms.Compose([ProcessFixations(cfg.input_shape, cfg.image_shape)])}
     params_norm = {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}
-    train_data = DADALoader(args.data_path, 'training', interval=args.frame_interval, max_frames=args.max_frames, 
-                            transforms={'image':transform_image, 'focus':transform_focus}, params_norm=params_norm, binary_cls=True)
-    traindata_loader = DataLoader(dataset=train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-    eval_data = DADALoader(args.data_path, 'validation', interval=args.frame_interval, max_frames=args.max_frames, 
-                            transforms={'image':transform_image, 'focus':transform_focus}, params_norm=params_norm, binary_cls=True)
-    evaldata_loader = DataLoader(dataset=eval_data, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+    # training dataset
+    train_data = DADALoader(cfg.data_path, 'training', interval=cfg.frame_interval, max_frames=cfg.max_frames, 
+                            transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls)
+    traindata_loader = DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers)
+    # validataion dataset
+    eval_data = DADALoader(cfg.data_path, 'validation', interval=cfg.frame_interval, max_frames=cfg.max_frames, 
+                            transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls)
+    evaldata_loader = DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
     print("# train set: %d, eval set: %d"%(len(train_data), len(eval_data)))
     return traindata_loader, evaldata_loader
 
      
 if __name__ == '__main__':
     from torch.utils.data import DataLoader
-    from data_transform import ProcessImages
+    from data_transform import ProcessImages, ProcessFixations
     import argparse, time
     from tqdm import tqdm
     import matplotlib.pyplot as plt
@@ -317,11 +319,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='PyTorch REINFORCE implementation')
     parser.add_argument('--data_path', default='./data/DADA-2000',
                         help='The relative path of dataset.')
-    parser.add_argument('--batch_size', type=int, default=10,
-                        help='The batch size in training process. Default: 10')
+    parser.add_argument('--batch_size', type=int, default=1,
+                        help='The batch size in training process. Default: 1')
     parser.add_argument('--frame_interval', type=int, default=5,
                         help='The number of frames per second for each video. Default: 10')
-    parser.add_argument('--max_frames', default=64, type=int,
+    parser.add_argument('--max_frames', default=-1, type=int,
                         help='Maximum number of frames for each untrimmed video.')
     parser.add_argument('--phase', default='train', choices=['train', 'test'],
                         help='Training or testing phase.')
@@ -337,8 +339,10 @@ if __name__ == '__main__':
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
     # initialize dataset
-    output_shape = (np.array(args.input_shape) / 8).astype(np.int64)
-    traindata_loader, evaldata_loader = setup_dataloader(args.input_shape, output_shape)
+    args.image_shape = [660, 1584]
+    args.output_shape = (np.array(args.input_shape) / 8).astype(np.int64)
+    args.binary_cls = True
+    traindata_loader, evaldata_loader = setup_dataloader(args)
 
     # prefetcher = PreFetcher(traindata_loader)
     # video_data, focus_data, coord_data = prefetcher.next()
@@ -349,7 +353,7 @@ if __name__ == '__main__':
     #     print(iteration)
 
     num_frames = []
-    num_clsses = 6
+    num_clsses = 2
     cls_stat = np.zeros((num_clsses,), dtype=np.int64)
     t_start = time.time()
     for i, (video_data, focus_data, coord_data) in enumerate(traindata_loader):
@@ -359,10 +363,18 @@ if __name__ == '__main__':
         num_frames.append(video_data.shape[1])
         t_start = time.time()
 
-    np.savez('msg_data', frames=num_frames, stats=cls_stat)
+    # np.savez('msg_data_2', frames=num_frames, stats=cls_stat)
+
+    fig, ax = plt.subplots()
+    plt.bar(range(len(num_frames)), num_frames)
+    plt.title('Number of frames for each video')
+    plt.savefig('stat_frames.png')
+    plt.close()
 
     fig, ax = plt.subplots()
     plt.bar(range(num_clsses), cls_stat)
-    plt.xticks(range(num_clsses), ('ego_person', 'ego_vehicle', 'ego_road', 'nonego_road', 'nonego_vehicle', 'nonego_person'))
+    # plt.xticks(range(num_clsses), ('ego_person', 'ego_vehicle', 'ego_road', 'nonego_road', 'nonego_vehicle', 'nonego_person'))
+    plt.xticks(range(num_clsses), ('ego', 'nonego'))
     plt.title('Number of videos for each category')
-    plt.savefig('stat_six.png')
+    plt.savefig('stat_two.png')
+    plt.close()
