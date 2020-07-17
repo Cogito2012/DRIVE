@@ -139,7 +139,7 @@ vis_data/
 *.png
 *.bmp
 *.out
-output/*
+output*
 metrics/saliency/code_forMetrics
 *.npz
 *.npy

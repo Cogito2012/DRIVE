@@ -26,16 +26,16 @@ class ReplayMemory:
         self.buffer = []
         self.position = 0
 
-    def push(self, state, action, reward, next_state, done):
+    def push(self, state, action, reward, next_state, rnn_state, labels, done):
         if len(self.buffer) < self.capacity:
             self.buffer.append(None)
-        self.buffer[self.position] = (state, action, reward, next_state, done)
+        self.buffer[self.position] = (state, action, reward, next_state, rnn_state, labels, done)
         self.position = (self.position + 1) % self.capacity
 
     def sample(self, batch_size):
         batch = random.sample(self.buffer, batch_size)
-        state, action, reward, next_state, done = map(np.stack, zip(*batch))
-        return state, action, reward, next_state, done
+        state, action, reward, next_state, rnn_state, labels, done = map(np.stack, zip(*batch))
+        return state, action, reward, next_state, rnn_state, labels, done
 
     def __len__(self):
         return len(self.buffer)
@@ -93,6 +93,100 @@ def setup_dataloader(cfg):
     return traindata_loader, evaldata_loader
 
 
+def write_logs(writer, outputs, updates):
+    """Write the logs to tensorboard"""
+    critic_1_loss, critic_2_loss, policy_loss, ent_loss, alpha, task_loss = outputs
+    writer.add_scalar('loss/critic_1', critic_1_loss, updates)
+    writer.add_scalar('loss/critic_2', critic_2_loss, updates)
+    writer.add_scalar('loss/policy', policy_loss, updates)
+    writer.add_scalar('loss/entropy_loss', ent_loss, updates)
+    writer.add_scalar('entropy_temprature/alpha', task_loss, updates)
+    writer.add_scalar('entropy_temprature/alpha', alpha, updates)
+
+
+def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, updates):
+    """ Training process for each epoch of dataset
+    """
+    for i, (video_data, focus_data, coord_data) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), 
+                                                                                     desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
+        # set environment data
+        state = env.set_data(video_data, focus_data, coord_data)
+        episode_reward = 0
+        episode_steps = 0
+        done = False
+        rnn_state = np.zeros((2, env.batch_size, cfg.SAC.hidden_size), dtype=np.float32)
+
+        while not done:
+            # select action
+            action, rnn_state = agent.select_action(state, rnn_state)
+
+            # Update parameters of all the networks
+            if len(memory) > cfg.SAC.batch_size:
+                # Number of updates per step in environment
+                for _ in range(cfg.SAC.updates_per_step):
+                    outputs = agent.update_parameters(memory, cfg.SAC.batch_size, updates)
+                    # write log
+                    write_logs(writer, outputs, updates)
+                    updates += 1
+
+            # step to next state
+            next_state, reward, done, _ = env.step(action) # Step
+            episode_steps += 1
+            episode_reward += reward
+
+            # push the current step into memory
+            mask = 1 if episode_steps == env.max_step else float(not done)
+            labels = np.array([env.cur_step-1, env.clsID, env.begin_accident, env.fps], dtype=np.float32)
+            memory.push(state.flatten(), action.flatten(), reward, next_state.flatten(), rnn_state.reshape(-1, cfg.SAC.hidden_size), labels, mask) # Append transition to memory
+
+            # shift to next state
+            state = next_state.copy()
+
+        i_episode = epoch * len(traindata_loader) + i
+        writer.add_scalar('reward/train', episode_reward, i_episode)
+        # print("Episode: {}, episode steps: {}, reward: {}".format(i_episode, episode_steps, round(episode_reward, 2)))
+    return updates
+
+
+def save_models(ckpt_dir, agent, cfg, epoch):
+    model_dict = {'policy_model': agent.policy.state_dict(),
+                  'policy_optim': agent.policy_optim.state_dict(),
+                  'critic_model': agent.critic.state_dict(),
+                  'critic_target': agent.critic_target.state_dict(),
+                  'configs': cfg}
+    if cfg.SAC.automatic_entropy_tuning:
+        model_dict.update({'alpha_optim': agent.critic_target.state_dict()})
+    torch.save(model_dict, os.path.join(ckpt_dir, 'sac_epoch_%02d.pt'%(epoch)))
+
+
+def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
+    avg_reward = 0.
+    for i, (video_data, focus_data, coord_data) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), 
+                                                                                    desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
+        # set environment data
+        state = env.set_data(video_data, focus_data, coord_data)
+
+        init_state = np.zeros((env.batch_size, cfg.SAC.hidden_size), dtype=np.float32)
+        rnn_state = (init_state, init_state)
+        episode_reward = 0
+        done = False
+        while not done:
+            # select action
+            action, rnn_state = agent.select_action(state, rnn_state, evaluate=True)
+            # step
+            next_state, reward, done, _ = env.step(action)
+            episode_reward += reward
+            # transition
+            state = next_state
+        avg_reward += episode_reward
+        # logging
+        i_episode = epoch * len(evaldata_loader) + i
+        writer.add_scalar('episode_reward/test', episode_reward, i_episode)
+
+    avg_reward /= len(evaldata_loader)
+    return avg_reward
+
+
 def train():
 
     # initilize environment
@@ -116,50 +210,21 @@ def train():
     # Memory
     memory = ReplayMemory(cfg.SAC.replay_size)
 
-    total_numsteps = 0
     updates = 0
     for e in range(cfg.num_epoch):
-        # we define each episode as the entire database
-        for i, (video_data, focus_data, coord_data) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), desc='Epoch: %d / %d'%(e + 1, cfg.num_epoch)):  # (B, T, H, W, C)
-            # set environment data
-            state = env.set_data(video_data, focus_data, coord_data)
-            episode_reward = 0
-            episode_steps = 0
-            done = False
+        # train each epoch
+        agent.set_status('train')
+        updates = train_per_epoch(traindata_loader, env, agent, cfg, writer, e, memory, updates)
 
-            while not done:
-                # select action
-                action = agent.select_action(state)
-
-                if len(memory) > cfg.SAC.batch_size:
-                    # Number of updates per step in environment
-                    for _ in range(cfg.SAC.updates_per_step):
-                        # Update parameters of all the networks
-                        critic_1_loss, critic_2_loss, policy_loss, ent_loss, alpha = agent.update_parameters(memory, cfg.SAC.batch_size, updates)
-                        # write log
-                        writer.add_scalar('loss/critic_1', critic_1_loss, updates)
-                        writer.add_scalar('loss/critic_2', critic_2_loss, updates)
-                        writer.add_scalar('loss/policy', policy_loss, updates)
-                        writer.add_scalar('loss/entropy_loss', ent_loss, updates)
-                        writer.add_scalar('entropy_temprature/alpha', alpha, updates)
-                        updates += 1
-                # step to next state
-                next_state, reward, done, _ = env.step(action) # Step
-                episode_steps += 1
-                total_numsteps += 1
-                episode_reward += reward
-
-                # push the current step into memory
-                mask = 1 if episode_steps == env.max_step else float(not done)
-                memory.push(state.flatten(), action.flatten(), reward, next_state.flatten(), mask) # Append transition to memory
-
-                state = next_state.copy()
-
-            i_episode = e * len(traindata_loader) + i
-            writer.add_scalar('reward/train', episode_reward, i_episode)
-            print("Episode: {}, total numsteps: {}, episode steps: {}, reward: {}".format(i_episode, total_numsteps, episode_steps, round(episode_reward, 2)))
+        # save model file for each epoch (episode)
+        save_models(ckpt_dir, agent, cfg, e + 1)
 
         # evaluate each epoch
+        agent.set_status('eval')
+        avg_reward = eval_per_epoch(evaldata_loader, env, agent, cfg, writer, e)
+
+    writer.close()
+    env.close()
 
 
 if __name__ == "__main__":
@@ -180,8 +245,3 @@ if __name__ == "__main__":
         pass
     else:
         raise NotImplementedError
-
-    
-    
-
-    

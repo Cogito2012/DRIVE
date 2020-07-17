@@ -12,11 +12,12 @@ class SAC(object):
         self.gamma = cfg.gamma
         self.tau = cfg.tau
         self.alpha = cfg.alpha
+        self.beta = cfg.beta
 
         self.policy_type = cfg.policy
         self.target_update_interval = cfg.target_update_interval
         self.automatic_entropy_tuning = cfg.automatic_entropy_tuning
-
+        self.num_classes = cfg.num_classes
         self.device = device
 
         self.critic = QNetwork(num_inputs, dim_action, cfg.hidden_size).to(device=self.device)
@@ -40,27 +41,53 @@ class SAC(object):
             self.automatic_entropy_tuning = False
             self.policy = DeterministicPolicy(num_inputs, dim_action, cfg.hidden_size).to(self.device)
             self.policy_optim = Adam(self.policy.parameters(), lr=cfg.lr)
+        
+        self.ce_loss = torch.nn.CrossEntropyLoss(reduction='none')
 
-    def select_action(self, state, evaluate=False):
-        state = torch.FloatTensor(state).to(self.device)
-        if evaluate is False:
-            action, _, _ = self.policy.sample(state)
+    
+    def set_status(self, phase='train'):
+        if phase == 'train':
+            self.policy.train()
+            self.critic.train()
+            self.critic_target.train()
+        elif phase == 'eval':
+            self.policy.eval()
+            self.critic.eval()
+            self.critic_target.eval()
         else:
-            _, _, action = self.policy.sample(state)
-        return action.detach().cpu().numpy()[0]
+            raise NotImplementedError
+
+
+    def select_action(self, state, rnn_state=None, evaluate=False):
+        state = torch.FloatTensor(state).to(self.device)
+        if rnn_state is not None:
+            rnn_state = (torch.from_numpy(rnn_state[0]).to(self.device), torch.from_numpy(rnn_state[1]).to(self.device))
+
+        if evaluate is False:
+            action, rnn_state, _, _ = self.policy.sample(state, rnn_state)
+        else:
+            _, rnn_state, _, action = self.policy.sample(state, rnn_state)
+        
+        if rnn_state is not None:
+            rnn_state = torch.cat((rnn_state[0].unsqueeze(0), rnn_state[1].unsqueeze(0)), dim=0).detach().cpu().numpy()
+        return action.detach().cpu().numpy()[0], rnn_state
+
 
     def update_parameters(self, memory, batch_size, updates):
         # Sample a batch from memory
-        state_batch, action_batch, reward_batch, next_state_batch, mask_batch = memory.sample(batch_size=batch_size)
+        state_batch, action_batch, reward_batch, next_state_batch, rnn_state_batch, labels_batch, mask_batch = memory.sample(batch_size=batch_size)
+        if rnn_state_batch[:, 0] is not None:
+            rnn_state_batch = (torch.from_numpy(rnn_state_batch[:, 0]).to(self.device), torch.from_numpy(rnn_state_batch[:, 1]).to(self.device))
 
         state_batch = torch.FloatTensor(state_batch).to(self.device)
-        next_state_batch = torch.FloatTensor(next_state_batch).to(self.device)
         action_batch = torch.FloatTensor(action_batch).to(self.device)
         reward_batch = torch.FloatTensor(reward_batch).to(self.device).unsqueeze(1)
+        next_state_batch = torch.FloatTensor(next_state_batch).to(self.device)
+        labels_batch = torch.FloatTensor(labels_batch).to(self.device)
         mask_batch = torch.FloatTensor(mask_batch).to(self.device).unsqueeze(1)
 
         with torch.no_grad():
-            next_state_action, next_state_log_pi, _ = self.policy.sample(next_state_batch)
+            next_state_action, _, next_state_log_pi, _ = self.policy.sample(next_state_batch, rnn_state_batch)
             qf1_next_target, qf2_next_target = self.critic_target(next_state_batch, next_state_action)
             min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - self.alpha * next_state_log_pi
             next_q_value = reward_batch + mask_batch * self.gamma * (min_qf_next_target)
@@ -73,12 +100,20 @@ class SAC(object):
         qf_loss.backward()
         self.critic_optim.step()
 
-        pi, log_pi, _ = self.policy.sample(state_batch)
+        pi, _, log_pi, _ = self.policy.sample(state_batch, rnn_state_batch)
 
         qf1_pi, qf2_pi = self.critic(state_batch, pi)
         min_qf_pi = torch.min(qf1_pi, qf2_pi)
 
         policy_loss = ((self.alpha * log_pi) - min_qf_pi).mean() # Jπ = 𝔼st∼D,εt∼N[α * logπ(f(εt;st)|st) − Q(st,f(εt;st))]
+
+        # compute the early anticipation loss
+        accident_pred = pi[:, 2:]
+        steps_batch, clsID_batch, toa_batch, fps_batch = labels_batch[:, 0], labels_batch[:, 1], labels_batch[:, 2], labels_batch[:, 3]
+        task_target = torch.zeros(batch_size, self.num_classes).to(self.device)
+        task_target.scatter_(1, clsID_batch.unsqueeze(1).long(), 1)  # one-hot
+        task_loss = self._exp_loss(accident_pred, task_target, steps_batch / fps_batch, toa_batch)
+        policy_loss = self.beta * policy_loss + task_loss
 
         self.policy_optim.zero_grad()
         policy_loss.backward()
@@ -101,7 +136,7 @@ class SAC(object):
         if updates % self.target_update_interval == 0:
             soft_update(self.critic_target, self.critic, self.tau)
 
-        return qf1_loss.item(), qf2_loss.item(), policy_loss.item(), alpha_loss.item(), alpha_tlogs.item()
+        return qf1_loss.item(), qf2_loss.item(), policy_loss.item(), alpha_loss.item(), alpha_tlogs.item(), task_loss.item()
 
     # Save model parameters
     def save_model(self, env_name, suffix="", actor_path=None, critic_path=None):
@@ -124,3 +159,21 @@ class SAC(object):
         if critic_path is not None:
             self.critic.load_state_dict(torch.load(critic_path))
 
+
+    def _exp_loss(self, pred, target, time, toa):
+        '''
+        :param pred:
+        :param target: onehot codings for binary classification
+        :param time:
+        :param toa:
+        :return:
+        '''
+        # positive example (exp_loss)
+        target_cls = target[:, 1]
+        target_cls = target_cls.to(torch.long)
+        penalty = -torch.max(torch.zeros_like(toa).to(toa.device, pred.dtype), toa.to(pred.dtype) - time - 1)
+        pos_loss = -torch.mul(torch.exp(penalty), -self.ce_loss(pred, target_cls))
+        # negative example
+        neg_loss = self.ce_loss(pred, target_cls)
+        loss = torch.mean(torch.add(torch.mul(pos_loss, target[:, 1]), torch.mul(neg_loss, target[:, 0])))
+        return loss

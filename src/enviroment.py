@@ -121,8 +121,6 @@ class DashCamEnv(core.Env):
         """fixation_pred: (2,)
            accident_pred: (1, 1)
         """
-        # # correctness reward (classification)
-        # accident_reward = -0.1 * self.cls_loss(accident_pred, self.clsID.unsqueeze(0))
         # attentiveness reward (mse of fixations)
         fixation_pred = self.norm_fix(fixation_pred)
         fixation_gt = self.norm_fix(self.fixations[self.cur_step + 1])
@@ -135,12 +133,12 @@ class DashCamEnv(core.Env):
             if self.clsID > 0:  
                 tta_reward = 1.0 * tta_weight  # true positive
             else:
-                tta_reward = -1.0 * tta_weight  # false positive
+                tta_reward = 0.0  # false positive
         else:
             if self.clsID > 0:
-                tta_reward = -1.0  # false negative
+                tta_reward = 0.0  # false negative
             else:
-                tta_reward = 1.0
+                tta_reward = 1.0   # true negative
                 
         # reward = fixation_reward + accident_reward + tta_reward
         reward = fixation_reward + tta_reward
@@ -199,6 +197,6 @@ class DashCamEnv(core.Env):
         self.cur_state = next_state.copy()
 
         if with_loss:
-            return next_state, cur_reward, cur_loss, done, info
+            return next_state, cur_reward, cls_loss, done, info
         return next_state, cur_reward, done, info
 
