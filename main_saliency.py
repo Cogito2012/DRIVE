@@ -135,7 +135,7 @@ def test():
 
     # run inference
     with torch.no_grad():
-        for i, (video_data, focus_data, data_info) in enumerate(testdata_loader):
+        for i, (video_data, focus_data, coord_data, data_info) in enumerate(testdata_loader):
             # parse data info
             data_info = data_info.cpu().numpy() if data_info.is_cuda else data_info.detach().numpy()
             filename = str(int(data_info[0, 0])) + '_%03d'%(int(data_info[0, 1])) + '.avi'

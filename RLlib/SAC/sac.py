@@ -138,26 +138,42 @@ class SAC(object):
 
         return qf1_loss.item(), qf2_loss.item(), policy_loss.item(), alpha_loss.item(), alpha_tlogs.item(), task_loss.item()
 
-    # Save model parameters
-    def save_model(self, env_name, suffix="", actor_path=None, critic_path=None):
-        if not os.path.exists('models/'):
-            os.makedirs('models/')
+    # # Save model parameters
+    # def save_model(self, env_name, suffix="", actor_path=None, critic_path=None):
+    #     if not os.path.exists('models/'):
+    #         os.makedirs('models/')
 
-        if actor_path is None:
-            actor_path = "models/sac_actor_{}_{}".format(env_name, suffix)
-        if critic_path is None:
-            critic_path = "models/sac_critic_{}_{}".format(env_name, suffix)
-        print('Saving models to {} and {}'.format(actor_path, critic_path))
-        torch.save(self.policy.state_dict(), actor_path)
-        torch.save(self.critic.state_dict(), critic_path)
+    #     if actor_path is None:
+    #         actor_path = "models/sac_actor_{}_{}".format(env_name, suffix)
+    #     if critic_path is None:
+    #         critic_path = "models/sac_critic_{}_{}".format(env_name, suffix)
+    #     print('Saving models to {} and {}'.format(actor_path, critic_path))
+    #     torch.save(self.policy.state_dict(), actor_path)
+    #     torch.save(self.critic.state_dict(), critic_path)
 
-    # Load model parameters
-    def load_model(self, actor_path, critic_path):
-        print('Loading models from {} and {}'.format(actor_path, critic_path))
-        if actor_path is not None:
-            self.policy.load_state_dict(torch.load(actor_path))
-        if critic_path is not None:
-            self.critic.load_state_dict(torch.load(critic_path))
+    def save_models(self, ckpt_dir, cfg, epoch):
+        model_dict = {'policy_model': self.policy.state_dict(),
+                    'policy_optim': self.policy_optim.state_dict(),
+                    'critic_model': self.critic.state_dict(),
+                    'critic_target': self.critic_target.state_dict(),
+                    'critic_optim': self.critic_optim.state_dict(),
+                    'configs': cfg}
+        if cfg.SAC.automatic_entropy_tuning:
+            model_dict.update({'alpha_optim': self.critic_target.state_dict()})
+        torch.save(model_dict, os.path.join(ckpt_dir, 'sac_epoch_%02d.pt'%(epoch)))
+        
+
+    def load_models(self, ckpt_dir, cfg):
+        filename = sorted(os.listdir(ckpt_dir))[-1]
+        weight_file = os.path.join(cfg.output, 'checkpoints', filename)
+        if os.path.isfile(weight_file):
+            checkpoint = torch.load(weight_file)
+            self.policy.load_state_dict(checkpoint['policy_model'])
+            # self.critic.load_state_dict(checkpoint['critic_model'])
+            # self.critic_target.load(checkpoint['critic_target'])
+            print("=> loaded checkpoint '{}'".format(weight_file))
+        else:
+            raise FileNotFoundError
 
 
     def _exp_loss(self, pred, target, time, toa):

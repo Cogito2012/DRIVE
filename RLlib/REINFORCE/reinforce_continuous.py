@@ -1,5 +1,6 @@
 import sys
 import math
+import os
 
 import torch
 import torch.autograd as autograd
@@ -50,7 +51,8 @@ class REINFORCE:
         """
         state: (1, 128)
         """
-        fix_scale, accident_score = self.policy_model(Variable(state))
+        state = Variable(torch.from_numpy(state)).to(self.device)
+        fix_scale, accident_score = self.policy_model(state)
         mu = torch.cat([fix_scale, accident_score], dim=1)
         sigma_sq = Variable(torch.zeros_like(mu).to(self.device) + 1e-6)
 
@@ -67,7 +69,7 @@ class REINFORCE:
         # entropy = torch.zeros_like(action).to(self.device)
         # log_prob = torch.ones_like(action).to(self.device)
 
-        return action[0], log_prob[0], entropy[0]
+        return action[0].detach().cpu().numpy(), log_prob[0], entropy[0]
 
 
     def update_parameters(self, rewards, tta_losses, log_probs, entropies, gamma, alpha):
@@ -83,3 +85,14 @@ class REINFORCE:
         utils.clip_grad_norm_(self.policy_model.parameters(), 40)
         self.optimizer.step()
         return loss
+
+
+    def load_models(self, ckpt_dir, args):
+        filename = sorted(os.listdir(ckpt_dir))[-1]
+        weight_file = os.path.join(args.output, 'checkpoints', filename)
+        if os.path.isfile(weight_file):
+            checkpoint = torch.load(weight_file)
+            self.policy_model.load_state_dict(checkpoint)
+            print("=> loaded checkpoint '{}'".format(weight_file))
+        else:
+            raise FileNotFoundError

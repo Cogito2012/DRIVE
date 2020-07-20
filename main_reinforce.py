@@ -12,6 +12,7 @@ from src.data_transform import ProcessImages, ProcessFixations
 from tqdm import tqdm
 import datetime
 from torch.utils.tensorboard import SummaryWriter
+from src.eval_tools import evaluation_dynamic
 
 
 def parse_main_args():
@@ -32,7 +33,7 @@ def parse_main_args():
     parser.add_argument('--num_workers', type=int, default=0, 
                         help='How many sub-workers to load dataset. Default: 0')
     # For training and testing
-    parser.add_argument('--phase', default='train', choices=['train', 'test'],
+    parser.add_argument('--phase', default='test', choices=['train', 'test'],
                         help='Training or testing phase.')
     parser.add_argument('--env_model', default='./output/saliency/checkpoints/saliency_model_25.pth',
                         help='The model weight file of environment model.')
@@ -67,13 +68,22 @@ def set_deterministic(seed):
     torch.backends.cudnn.deterministic = True
 
 
-def setup_dataloader(input_shape, output_shape):
+def setup_dataloader(input_shape, output_shape, isTraining=True):
 
     img_shape = [660, 1584]
     transform_dict = {'image': transforms.Compose([ProcessImages(input_shape)]),
                       'focus': transforms.Compose([ProcessImages(output_shape)]), 
                       'fixpt': transforms.Compose([ProcessFixations(input_shape, img_shape)])}
     params_norm = {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}
+
+    # testing dataset
+    if not isTraining:
+        test_data = DADALoader(args.data_path, 'testing', interval=1, max_frames=-1, 
+                                transforms=transform_dict, params_norm=params_norm, binary_cls=args.binary_cls)
+        testdata_loader = DataLoader(dataset=test_data, batch_size=1, shuffle=False, num_workers=args.num_workers)
+        print("# test set: %d"%(len(test_data)))
+        return testdata_loader
+
     # training dataset
     train_data = DADALoader(args.data_path, 'training', interval=args.frame_interval, max_frames=args.max_frames, 
                             transforms=transform_dict, params_norm=params_norm, binary_cls=args.binary_cls)
@@ -141,6 +151,67 @@ def train():
     env.close()
 
 
+def test():
+    # prepare output directory
+    output_dir = os.path.join(args.output, 'eval')
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    result_file = os.path.join(output_dir, 'results.npy')
+    if os.path.exists(result_file):
+        save_dict = np.load(result_file)
+        save_dict = save_dict.item()
+    else:
+        # initilize environment
+        env = DashCamEnv(args.input_shape, args.dim_action, fps=30/args.frame_interval, device=device)
+        env.set_model(pretrained=True, weight_file=args.env_model)
+
+        # initialize agents
+        agent = REINFORCE(args.hidden_size, env.dim_state, env.dim_action, device=device)
+        agent.policy_model.eval()
+
+        # initialize dataset
+        testdata_loader = setup_dataloader(args.input_shape, env.output_shape, isTraining=False)
+
+        # load agent models (by default: the last epoch)
+        ckpt_dir = os.path.join(args.output, 'checkpoints')
+        agent.load_models(ckpt_dir, args)
+
+        save_dict = {'all_preds': [], 'gt_labels': [], 'toas': [], 'vids': []}
+        for i, (video_data, focus_data, coord_data, data_info) in tqdm(enumerate(testdata_loader), total=len(testdata_loader)):  # (B, T, H, W, C)
+            # set environment data
+            state = env.set_data(video_data, focus_data, coord_data)
+
+            pred_scores = []
+            # run each time step
+            for t in range(env.max_step):
+                # select action
+                action, _, _ = agent.select_action(state)
+                # state transition
+                state, reward, done, _ = env.step(action)
+
+                accident_pred = action[2:]
+                score = np.exp(accident_pred[1]) / np.sum(np.exp(accident_pred))
+                pred_scores.append(score)
+            # save results
+            save_dict['all_preds'].append(np.array(pred_scores, dtype=np.float32))
+            save_dict['gt_labels'].append(env.clsID)
+            save_dict['toas'].append(env.begin_accident)
+            save_dict['vids'].append(data_info[0, 1])
+
+        np.save(result_file, save_dict)
+
+    # evaluate the results
+    all_pred = save_dict['all_preds']
+    all_labels = save_dict['gt_labels']
+    all_toas = save_dict['toas']
+    all_fps = [30/args.frame_interval] * len(all_labels)
+    AP, mTTA, TTA_R80 = evaluation_dynamic(all_pred, all_labels, all_toas, all_fps)
+    # print
+    print("AP = %.4f, mean TTA = %.4f, TTA@0.8 = %.4f"%(AP, mTTA, TTA_R80))
+
+
+
 if __name__ == "__main__":
     # parse input arguments
     args = parse_main_args()
@@ -156,8 +227,7 @@ if __name__ == "__main__":
     if args.phase == 'train':
         train()
     elif args.phase == 'test':
-        # test()
-        pass
+        test()
     elif args.phase == 'eval':
         # evaluate()
         pass

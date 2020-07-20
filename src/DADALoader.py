@@ -261,7 +261,7 @@ class DADALoader(Dataset):
             data_info = torch.Tensor(data_info)
 
         if self.phase == 'testing':
-            return video_data, focus_data, data_info
+            return video_data, focus_data, coord_data, data_info
 
         return video_data, focus_data, coord_data
      

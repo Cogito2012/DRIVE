@@ -50,9 +50,14 @@ class DashCamEnv(core.Env):
         # self.fixations = torch.where(self.coord_data[0, :, :2] > 0, self.coord_data[0, :, :2], fix_ctr.expand_as(self.coord_data[0, :, :2]))
         fix_ctrs = np.repeat(np.array([[self.width / 2.0, self.height / 2.0]]), self.max_step, axis=0)
         self.fixations = np.where(coord_data[0, :, :2] > 0, coord_data[0, :, :2], fix_ctrs)
-        self.clsID = self.coord_data[0, :, 2].unique()[1].long() - 1  # class ID starts from 0 to 5
-        # self.begin_accident = torch.clamp(torch.nonzero(self.coord_data[0, :, 2] > 0)[0, 0] / float(self.fps), min=1)
-        self.begin_accident = np.maximum(np.where(coord_data[0, :, 2] > 0)[0][0] / float(self.fps), 1.0)
+        cls_set = self.coord_data[0, :, 2].unique()
+        if len(cls_set) > 1:
+            self.clsID = cls_set[1].long() - 1 # class ID starts from 0 to 5
+            # self.begin_accident = torch.clamp(torch.nonzero(self.coord_data[0, :, 2] > 0)[0, 0] / float(self.fps), min=1)
+            self.begin_accident = np.maximum(np.where(coord_data[0, :, 2] > 0)[0][0] / float(self.fps), 1.0)
+        else:
+            self.clsID = 0
+            self.begin_accident = -1
         # reset the agent to the initial states
         state = self.reset()
         return state
