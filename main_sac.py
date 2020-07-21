@@ -112,7 +112,7 @@ def write_logs(writer, outputs, updates):
     writer.add_scalar('loss/critic_2', critic_2_loss, updates)
     writer.add_scalar('loss/policy', policy_loss, updates)
     writer.add_scalar('loss/entropy_loss', ent_loss, updates)
-    writer.add_scalar('entropy_temprature/alpha', task_loss, updates)
+    writer.add_scalar('loss/task_loss', task_loss, updates)
     writer.add_scalar('entropy_temprature/alpha', alpha, updates)
 
 
@@ -137,8 +137,9 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
                 # Number of updates per step in environment
                 for _ in range(cfg.SAC.updates_per_step):
                     outputs = agent.update_parameters(memory, cfg.SAC.batch_size, updates)
-                    # write log
-                    write_logs(writer, outputs, updates)
+                    if updates % cfg.SAC.logging_interval == 0:
+                        # write log
+                        write_logs(writer, outputs, updates)
                     updates += 1
 
             # step to next state
@@ -155,13 +156,14 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
             state = next_state.copy()
 
         i_episode = epoch * len(traindata_loader) + i
-        writer.add_scalar('reward/train', episode_reward, i_episode)
-        # print("Episode: {}, episode steps: {}, reward: {}".format(i_episode, episode_steps, round(episode_reward, 2)))
+        avg_reward = episode_reward / episode_steps
+        writer.add_scalar('reward_avg/train', avg_reward, i_episode)
+
     return updates
 
 
 def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
-    avg_reward = 0.
+    
     for i, (video_data, focus_data, coord_data) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), 
                                                                                     desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         # set environment data
@@ -170,6 +172,7 @@ def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
         init_state = np.zeros((env.batch_size, cfg.SAC.hidden_size), dtype=np.float32)
         rnn_state = (init_state, init_state)
         episode_reward = 0
+        episode_steps = 0
         done = False
         while not done:
             # select action
@@ -177,15 +180,14 @@ def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
             # step
             next_state, reward, done, _ = env.step(action)
             episode_reward += reward
+            episode_steps += 1
             # transition
             state = next_state
-        avg_reward += episode_reward
+        
         # logging
         i_episode = epoch * len(evaldata_loader) + i
-        writer.add_scalar('episode_reward/test', episode_reward, i_episode)
-
-    avg_reward /= len(evaldata_loader)
-    return avg_reward
+        avg_reward = episode_reward / episode_steps
+        writer.add_scalar('reward_avg/test', avg_reward, i_episode)
 
 
 def train():
@@ -222,7 +224,7 @@ def train():
 
         # evaluate each epoch
         agent.set_status('eval')
-        avg_reward = eval_per_epoch(evaldata_loader, env, agent, cfg, writer, e)
+        eval_per_epoch(evaldata_loader, env, agent, cfg, writer, e)
 
     writer.close()
     env.close()
@@ -295,7 +297,7 @@ def test():
     AP, mTTA, TTA_R80 = evaluation_dynamic(all_pred, all_labels, all_toas, all_fps)
     # print
     print("AP = %.4f, mean TTA = %.4f, TTA@0.8 = %.4f"%(AP, mTTA, TTA_R80))
-    
+
 
 if __name__ == "__main__":
     

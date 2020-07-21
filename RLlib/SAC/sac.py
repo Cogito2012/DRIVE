@@ -138,18 +138,6 @@ class SAC(object):
 
         return qf1_loss.item(), qf2_loss.item(), policy_loss.item(), alpha_loss.item(), alpha_tlogs.item(), task_loss.item()
 
-    # # Save model parameters
-    # def save_model(self, env_name, suffix="", actor_path=None, critic_path=None):
-    #     if not os.path.exists('models/'):
-    #         os.makedirs('models/')
-
-    #     if actor_path is None:
-    #         actor_path = "models/sac_actor_{}_{}".format(env_name, suffix)
-    #     if critic_path is None:
-    #         critic_path = "models/sac_critic_{}_{}".format(env_name, suffix)
-    #     print('Saving models to {} and {}'.format(actor_path, critic_path))
-    #     torch.save(self.policy.state_dict(), actor_path)
-    #     torch.save(self.critic.state_dict(), critic_path)
 
     def save_models(self, ckpt_dir, cfg, epoch):
         model_dict = {'policy_model': self.policy.state_dict(),
@@ -187,7 +175,10 @@ class SAC(object):
         # positive example (exp_loss)
         target_cls = target[:, 1]
         target_cls = target_cls.to(torch.long)
+        
         penalty = -torch.max(torch.zeros_like(toa).to(toa.device, pred.dtype), toa.to(pred.dtype) - time - 1)
+        penalty = torch.where(toa > 0, penalty, torch.zeros_like(penalty).to(pred.device))
+
         pos_loss = -torch.mul(torch.exp(penalty), -self.ce_loss(pred, target_cls))
         # negative example
         neg_loss = self.ce_loss(pred, target_cls)
