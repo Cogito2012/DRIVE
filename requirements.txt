@@ -1,0 +1,14 @@
+torch==1.4.0
+torchvision==0.5.0
+opencv-python==4.2.0.34
+kornia==0.2.2
+tqdm==4.46.1
+tensorboard==1.14.0
+tensorboardX==2.0
+gym==0.17.2
+PyYAML==5.3.1
+easydict==1.9
+matplotlib==3.2.2
+scikit-learn==0.23.1
+Transplant==0.8.10
+terminaltables==3.1.0
