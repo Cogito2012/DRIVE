@@ -8,7 +8,7 @@ from torchvision import transforms
 class DADALoader(Dataset):
     def __init__(self, root_path, phase, interval=1, max_frames=-1, 
                        transforms={'image':None, 'focus': None, 'fixpt': None}, 
-                       params_norm=None, binary_cls=False, toTensor=True):
+                       params_norm=None, binary_cls=False, use_focus=True, use_fixation=True, toTensor=True):
         self.root_path = root_path
         self.phase = phase  # 'training', 'testing', 'validation'
         self.interval = interval
@@ -16,9 +16,13 @@ class DADALoader(Dataset):
         self.transforms = transforms
         self.params_norm = params_norm
         self.binary_cls = binary_cls
+        self.use_focus = use_focus
+        self.use_fixation = use_fixation
         self.toTensor = toTensor
         self.fps = 30
-        self.exclude_accidents = ['52', '53', '54']
+        # the specified classes are obtained by stat.py, in which classes with two few samples are filtered out.
+        self.accident_classes = ['1', '5', '6', '8', '10', '11', '12', '28', '29', '30', '34', '38', '39', '40', '46', '47', '54']
+        self.num_classes = len(self.accident_classes)
 
         self.data_list = self.get_data_list()
         mapping_file = os.path.join(root_path, 'mapping.txt')
@@ -32,7 +36,7 @@ class DADALoader(Dataset):
         # loop for each type of accident
         data_list = []
         for accident in sorted(os.listdir(rgb_path)):
-            if accident in self.exclude_accidents:
+            if accident not in self.accident_classes:
                 continue
             accident_rgb_path = os.path.join(rgb_path, accident)
             for vid in sorted(os.listdir(accident_rgb_path)):
@@ -165,7 +169,7 @@ class DADALoader(Dataset):
         # coordinate path
         coord_file = os.path.join(self.root_path, self.phase, 'coordinate', self.data_list[index] + '_coordinate.txt')
         assert os.path.exists(coord_file), "File does not exist: %s"%(coord_file)
-        # get the class ID
+        # get the class ID (starting from 1)
         clsID = self.get_classID(index, binary_class=self.binary_cls)
         coord_data = []
         with open(coord_file, 'r') as f:
@@ -192,24 +196,7 @@ class DADALoader(Dataset):
             else:
                 clsID = 1  # ego-car uninvolved
         else:
-            clsID = clsID_paper
-        # if group:
-        #     if clsID_paper >= 1 and clsID_paper < 7:
-        #         clsID = 1  # ego dynamic person-centric
-        #     elif clsID_paper >= 7 and clsID_paper < 13:
-        #         clsID = 2  # ego dynamic vehicle-centric
-        #     elif clsID_paper >= 13 and clsID_paper < 19:
-        #         clsID = 3  # ego static road-centric
-        #     elif clsID_paper >= 19 and clsID_paper < 37:
-        #         clsID = 4  # nonego static road-centric
-        #     elif clsID_paper >= 37 and clsID_paper < 52:
-        #         clsID = 5  # nonego dynamic vehicle-centric
-        #     elif clsID_paper >= 52 and clsID_paper < 61:
-        #         clsID = 6  # nonego dynamic person-centric
-        #     else:
-        #         clsID = 3  # accident 51(61)
-        # else:
-        #     clsID = clsID_paper
+            clsID = self.accident_classes.index(atype) + 1  # starting from 1
         return clsID
 
 
@@ -243,27 +230,30 @@ class DADALoader(Dataset):
                 for i in range(video_data.shape[1]):
                     video_data[:, i] = (video_data[:, i] - self.params_norm['mean'][i]) / self.params_norm['std'][i]
 
-        # read focus data, (T, H, W, C)
-        focus_data = self.read_focus_from_images(frame_ids, index)
-        # focus_data = self.read_focus_from_videos(frame_ids, index)
-        if self.transforms['focus'] is not None:
-            focus_data = self.transforms['focus'](focus_data)  # (T, 1, H, W)
+        if self.use_focus:
+            # read focus data, (T, H, W, C)
+            focus_data = self.read_focus_from_images(frame_ids, index)
+            # focus_data = self.read_focus_from_videos(frame_ids, index)
+            if self.transforms['focus'] is not None:
+                focus_data = self.transforms['focus'](focus_data)  # (T, 1, H, W)
+        else:
+            focus_data = None
         
-        # read coordinates
-        coord_data = self.read_coord_arrays(frame_ids, index)
-        if self.transforms['fixpt'] is not None:
-            coord_data[:, :2] = self.transforms['fixpt'](coord_data[:, :2])
+        if self.use_fixation:
+            # read coordinates
+            coord_data = self.read_coord_arrays(frame_ids, index)
+            if self.transforms['fixpt'] is not None:
+                coord_data[:, :2] = self.transforms['fixpt'](coord_data[:, :2])
+        else:
+            coord_data = None
 
         if self.toTensor:
             video_data = torch.Tensor(video_data)
-            focus_data = torch.Tensor(focus_data)
-            coord_data = torch.Tensor(coord_data)
             data_info = torch.Tensor(data_info)
+            focus_data = torch.Tensor(focus_data) if focus_data is not None else torch.empty(0)
+            coord_data = torch.Tensor(coord_data) if coord_data is not None else torch.empty(0)
 
-        if self.phase == 'testing':
-            return video_data, focus_data, coord_data, data_info
-
-        return video_data, focus_data, coord_data
+        return video_data, focus_data, coord_data, data_info
      
 
 class PreFetcher():
@@ -356,7 +346,7 @@ if __name__ == '__main__':
     num_clsses = 2
     cls_stat = np.zeros((num_clsses,), dtype=np.int64)
     t_start = time.time()
-    for i, (video_data, focus_data, coord_data) in enumerate(traindata_loader):
+    for i, (video_data, focus_data, coord_data, data_info) in enumerate(traindata_loader):
         clsID = int(coord_data[0, :, 2].unique()[1])
         print("batch: %d / %d, num_frames = %d, cls = %d, time=%.3f"%(i, len(traindata_loader), video_data.shape[1], clsID, time.time() - t_start))
         cls_stat[clsID-1] += 1

@@ -61,7 +61,7 @@ def train():
     for k in range(args.epoch):
         # train the model 
         model.train()
-        for i, (video_data, focus_data, _) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), desc="Epoch %d [train]"%(k)):
+        for i, (video_data, focus_data, _, _) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), desc="Epoch %d [train]"%(k)):
             optimizer.zero_grad()
             # move data to device (gpu)
             video_data = video_data.view(-1, video_data.size(2), video_data.size(3), video_data.size(4)) \
@@ -81,7 +81,7 @@ def train():
         # eval the model
         model.eval()
         loss_val = 0
-        for i, (video_data, focus_data, _) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), desc="Epoch %d [eval]"%(k)):
+        for i, (video_data, focus_data, _, _) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), desc="Epoch %d [eval]"%(k)):
             # move data to device (gpu)
             video_data = video_data.view(-1, video_data.size(2), video_data.size(3), video_data.size(4)) \
                         .contiguous().to(device, dtype=torch.float)  # ~30 MiB

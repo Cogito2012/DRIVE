@@ -134,7 +134,7 @@ dmypy.json
 .pyc
 logs/
 vis_data/
-*.avi
+*.avit
 *.mp4
 *.png
 *.bmp
@@ -144,3 +144,6 @@ metrics/saliency/code_forMetrics
 *.npz
 *.npy
 *.pkl
+*.pt
+*.pth
+*.pth.tar

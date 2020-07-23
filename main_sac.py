@@ -119,7 +119,7 @@ def write_logs(writer, outputs, updates):
 def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, updates):
     """ Training process for each epoch of dataset
     """
-    for i, (video_data, focus_data, coord_data) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), 
+    for i, (video_data, focus_data, coord_data, data_info) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), 
                                                                                      desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         # set environment data
         state = env.set_data(video_data, focus_data, coord_data)
@@ -164,7 +164,7 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
 
 def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
     
-    for i, (video_data, focus_data, coord_data) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), 
+    for i, (video_data, focus_data, coord_data, data_info) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), 
                                                                                     desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         # set environment data
         state = env.set_data(video_data, focus_data, coord_data)

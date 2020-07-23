@@ -118,7 +118,7 @@ def train():
     num_episode = 0
     for e in range(args.num_epoch):
         # we define each episode as the entire database
-        for i, (video_data, focus_data, coord_data) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), desc='Epoch: %d / %d'%(e + 1, args.num_epoch)):  # (B, T, H, W, C)
+        for i, (video_data, focus_data, coord_data, data_info) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), desc='Epoch: %d / %d'%(e + 1, args.num_epoch)):  # (B, T, H, W, C)
             state = env.set_data(video_data, focus_data, coord_data)
             entropies, log_probs, rewards, cls_losses = [], [], [], []
             # run each time step
