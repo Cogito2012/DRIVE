@@ -6,12 +6,13 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 
 class DADALoader(Dataset):
-    def __init__(self, root_path, phase, interval=1, max_frames=-1, 
+    def __init__(self, root_path, phase, interval=1, min_frames=32, max_frames=-1, 
                        transforms={'image':None, 'focus': None, 'fixpt': None}, 
                        params_norm=None, binary_cls=False, use_focus=True, use_fixation=True, toTensor=True):
         self.root_path = root_path
         self.phase = phase  # 'training', 'testing', 'validation'
         self.interval = interval
+        self.min_frames = min_frames
         self.max_frames = max_frames
         self.transforms = transforms
         self.params_norm = params_norm
@@ -40,6 +41,9 @@ class DADALoader(Dataset):
                 continue
             accident_rgb_path = os.path.join(rgb_path, accident)
             for vid in sorted(os.listdir(accident_rgb_path)):
+                num_frames = len(os.listdir(os.path.join(accident_rgb_path, vid)))
+                if num_frames < self.min_frames:  # igore too short videos
+                    continue
                 data_list.append(accident + '/' + vid)
         return data_list
 
