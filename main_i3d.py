@@ -78,7 +78,7 @@ def pre_process(data_batch, classes):
     # prepare the input
     data_input = torch.cat(data_input, dim=0)
     label_input = torch.cat(label_input, dim=0)
-    return Variable(data_input.to(device)), Variable(label_input.to(device))
+    return data_input, label_input
 
 
 def train():
@@ -115,7 +115,11 @@ def train():
     for k in range(args.epoch):
         i3d.train()
         for i, data_batch in tqdm(enumerate(traindata_loader), total=len(traindata_loader), desc="Epoch %d [train]"%(k)):
-            data_input, data_label = pre_process(data_batch, accident_classes)
+            data_input, label_target = pre_process(data_batch, accident_classes)
+            data_input = Variable(data_input.to(device))
+            label_target = Variable(label_target.to(device))
+            logits_pred = i3d(data_input)
+
             
         print("Done")
 
