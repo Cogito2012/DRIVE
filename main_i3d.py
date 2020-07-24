@@ -72,7 +72,13 @@ def pre_process(data_batch, classes, len_seg=16):
         end_frame = torch.nonzero(coord[:, 2] > 0)[-1, 0]
         # uniform sampling (no matter how many frames provided)
         inds = np.linspace(begin_frame, end_frame, len_seg).astype(np.int32)
-        trimed_pos = video[inds].permute([1, 0, 2, 3]).unsqueeze(0)  # (1, 3, 16, H, W)
+        trimed_pos1 = video[inds].permute([1, 0, 2, 3]).unsqueeze(0)  # (1, 3, 16, H, W)
+        # center cropping
+        inds_ctr = int((begin_frame + end_frame) * 0.5)
+        start = max(begin_frame, inds_ctr-int(len_seg / 2.0))
+        end = min(inds_ctr+int(len_seg / 2.0), end_frame)
+        inds = np.linspace(start, end, len_seg).astype(np.int32)
+        trimed_pos2 = video[inds].permute([1, 0, 2, 3]).unsqueeze(0)
         # sample negative
         if begin_frame - len_seg >= 0:
             # sampling negative at early section
@@ -80,12 +86,14 @@ def pre_process(data_batch, classes, len_seg=16):
         elif end_frame + len_seg < video.size(0):
             # sampling negative at later section
             trimed_neg = video[end_frame + 1: end_frame + len_seg + 1].permute([1, 0, 2, 3]).unsqueeze(0)
-        data_input.append(torch.cat([trimed_pos, trimed_neg], dim=0))  # (2, 3, 16, H, W))
+        else:
+            trimed_neg = torch.zeros_like(trimed_pos1)
+        data_input.append(torch.cat([trimed_pos1, trimed_pos2, trimed_neg], dim=0))  # (3, 3, 16, H, W))
 
         # process label
         logit_pos = torch.Tensor([classes.index(str(int(info[0].item()))) + 1]).long()
         logit_neg = torch.zeros_like(logit_pos)
-        logit = torch.cat([logit_pos.unsqueeze(0), logit_neg.unsqueeze(0)], dim=0)
+        logit = torch.cat([logit_pos.unsqueeze(0), logit_pos.unsqueeze(0), logit_neg.unsqueeze(0)], dim=0)
         logits.append(logit)
 
         # onehot labels
@@ -93,7 +101,7 @@ def pre_process(data_batch, classes, len_seg=16):
         onehot_pos[logit_pos] = 1
         onehot_neg = torch.zeros((len(classes)+1))
         onehot_neg[0] = 1
-        label_input.append(torch.cat([onehot_pos.unsqueeze(0), onehot_neg.unsqueeze(0)], dim=0))
+        label_input.append(torch.cat([onehot_pos.unsqueeze(0), onehot_pos.unsqueeze(0), onehot_neg.unsqueeze(0)], dim=0))
     # prepare the input
     data_input = torch.cat(data_input, dim=0)
     label_input = torch.cat(label_input, dim=0)
@@ -128,8 +136,8 @@ def train():
         if 'Mixed_5' not in p_name:
             p_obj.requires_grad = False
     # optimizer
-    optimizer = optim.SGD(filter(lambda p: p.requires_grad, i3d.parameters()), lr=args.learning_rate, momentum=0.9, weight_decay=1e-6)
-    lr_sched = optim.lr_scheduler.MultiStepLR(optimizer, [300, 1000])
+    optimizer = optim.SGD(filter(lambda p: p.requires_grad, i3d.parameters()), lr=args.learning_rate, momentum=0.9, weight_decay=1e-4)
+    lr_sched = optim.lr_scheduler.MultiStepLR(optimizer, [30, 40])
 
     steps = 0  # total number of gradient steps
     avg_loss = 0  # moving average loss
@@ -168,6 +176,7 @@ def train():
             for i, data_batch in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), desc="Epoch %d [eval]"%(k)):
                 data_input, label_target, logits = pre_process(data_batch, accident_classes)
                 data_input = data_input.to(device)
+                label_target = label_target.to(device)
                 # run forward
                 predictions = i3d(data_input)
                 # logits_pred = torch.argmax(predictions.squeeze(-1), dim=1, keepdim=True)
@@ -203,7 +212,7 @@ if __name__ == "__main__":
                         help='Maximum number of frames for each untrimmed video.')
     parser.add_argument('--phase', default='train', choices=['train', 'test', 'eval'],
                         help='Training or testing phase.')
-    parser.add_argument('--epoch', type=int, default=20,
+    parser.add_argument('--epoch', type=int, default=50,
                         help='The number of training epochs, default: 20.')
     parser.add_argument('--input_shape', nargs='+', type=int, default=[224, 224],
                         help='The input shape of images. default: [r=480, c=640]')
@@ -222,7 +231,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--learning_rate', type=float, default=0.001,
                         help='The learning rate for fine-tuning.')
-    parser.add_argument('--num_steps', type=int, default=4,
+    parser.add_argument('--num_steps', type=int, default=10,
                         help='The number of forward steps for each gradient descent update')
     args = parser.parse_args()
 

@@ -22,7 +22,8 @@ case ${PHASE} in
         --phase train \
         --batch_size 1 \
         --input_shape 224 224 \
-        --epoch 20 \
+        --num_workers 6 \
+        --epoch 50 \
         --gpus $GPU_IDS \
         --output ./output/I3D
     ;;
