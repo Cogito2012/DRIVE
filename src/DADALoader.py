@@ -8,7 +8,7 @@ from torchvision import transforms
 class DADALoader(Dataset):
     def __init__(self, root_path, phase, interval=1, min_frames=32, max_frames=-1, 
                        transforms={'image':None, 'focus': None, 'fixpt': None}, 
-                       params_norm=None, binary_cls=False, use_focus=True, use_fixation=True, toTensor=True):
+                       params_norm=None, binary_cls=False, use_focus=True, use_fixation=True):
         self.root_path = root_path
         self.phase = phase  # 'training', 'testing', 'validation'
         self.interval = interval
@@ -19,7 +19,6 @@ class DADALoader(Dataset):
         self.binary_cls = binary_cls
         self.use_focus = use_focus
         self.use_fixation = use_fixation
-        self.toTensor = toTensor
         self.fps = 30
         # the specified classes are obtained by stat.py, in which classes with two few samples are filtered out.
         self.accident_classes = ['1', '5', '6', '8', '10', '11', '12', '28', '29', '30', '34', '38', '39', '40', '46', '47', '54']
@@ -241,7 +240,7 @@ class DADALoader(Dataset):
             if self.transforms['focus'] is not None:
                 focus_data = self.transforms['focus'](focus_data)  # (T, 1, H, W)
         else:
-            focus_data = None
+            focus_data = torch.empty(0)
         
         if self.use_fixation:
             # read coordinates
@@ -249,13 +248,7 @@ class DADALoader(Dataset):
             if self.transforms['fixpt'] is not None:
                 coord_data[:, :2] = self.transforms['fixpt'](coord_data[:, :2])
         else:
-            coord_data = None
-
-        if self.toTensor:
-            video_data = torch.Tensor(video_data)
-            data_info = torch.Tensor(data_info)
-            focus_data = torch.Tensor(focus_data) if focus_data is not None else torch.empty(0)
-            coord_data = torch.Tensor(coord_data) if coord_data is not None else torch.empty(0)
+            coord_data = torch.empty(0)
 
         return video_data, focus_data, coord_data, data_info
      

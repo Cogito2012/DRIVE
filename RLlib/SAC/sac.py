@@ -42,7 +42,8 @@ class SAC(object):
             self.policy = DeterministicPolicy(num_inputs, dim_action, cfg.hidden_size).to(self.device)
             self.policy_optim = Adam(self.policy.parameters(), lr=cfg.lr)
         
-        self.ce_loss = torch.nn.CrossEntropyLoss(reduction='none')
+        # self.ce_loss = torch.nn.CrossEntropyLoss(reduction='none')
+        self.nll_loss = torch.nn.NLLLoss(reduction='none')
 
     
     def set_status(self, phase='train'):
@@ -108,11 +109,14 @@ class SAC(object):
         policy_loss = ((self.alpha * log_pi) - min_qf_pi).mean() # Jπ = 𝔼st∼D,εt∼N[α * logπ(f(εt;st)|st) − Q(st,f(εt;st))]
 
         # compute the early anticipation loss
-        accident_pred = pi[:, 2:]
+        # accident_pred = 0.5 * torch.log((1 + pi[:, 2:]) / (1 - pi[:, 2:]) + 1e-6)
+        accident_score = torch.sqrt((1 + pi[:, 2:]) / (1 - pi[:, 2:]))
+        score_pred = accident_score / torch.sum(accident_score, dim=1, keepdim=True)
+
         steps_batch, clsID_batch, toa_batch, fps_batch = labels_batch[:, 0], labels_batch[:, 1], labels_batch[:, 2], labels_batch[:, 3]
         task_target = torch.zeros(batch_size, self.num_classes).to(self.device)
         task_target.scatter_(1, clsID_batch.unsqueeze(1).long(), 1)  # one-hot
-        task_loss = self._exp_loss(accident_pred, task_target, steps_batch / fps_batch, toa_batch)
+        task_loss = self._exp_loss(score_pred, task_target, steps_batch / fps_batch, toa_batch)
         policy_loss = self.beta * policy_loss + task_loss
 
         self.policy_optim.zero_grad()
@@ -179,8 +183,10 @@ class SAC(object):
         penalty = -torch.max(torch.zeros_like(toa).to(toa.device, pred.dtype), toa.to(pred.dtype) - time - 1)
         penalty = torch.where(toa > 0, penalty, torch.zeros_like(penalty).to(pred.device))
 
-        pos_loss = -torch.mul(torch.exp(penalty), -self.ce_loss(pred, target_cls))
+        # pos_loss = -torch.mul(torch.exp(penalty), -self.ce_loss(pred, target_cls))
+        pos_loss = -torch.mul(torch.exp(penalty), -self.nll_loss(torch.log(pred + 1e-6), target_cls))
         # negative example
-        neg_loss = self.ce_loss(pred, target_cls)
+        # neg_loss = self.ce_loss(pred, target_cls)
+        neg_loss = self.nll_loss(torch.log(pred + 1e-6), target_cls)
         loss = torch.mean(torch.add(torch.mul(pos_loss, target[:, 1]), torch.mul(neg_loss, target[:, 0])))
         return loss

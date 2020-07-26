@@ -86,19 +86,19 @@ def setup_dataloader(cfg, isTraining=True):
     # testing dataset
     if not isTraining:
         test_data = DADALoader(cfg.data_path, 'testing', interval=1, max_frames=-1, 
-                                transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls)
+                                transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_focus=cfg.use_salmap)
         testdata_loader = DataLoader(dataset=test_data, batch_size=1, shuffle=False, num_workers=cfg.num_workers)
         print("# test set: %d"%(len(test_data)))
         return testdata_loader
 
     # training dataset
     train_data = DADALoader(cfg.data_path, 'training', interval=cfg.frame_interval, max_frames=cfg.max_frames, 
-                            transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls)
+                            transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_focus=cfg.use_salmap)
     traindata_loader = DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers)
 
     # validataion dataset
     eval_data = DADALoader(cfg.data_path, 'validation', interval=cfg.frame_interval, max_frames=cfg.max_frames, 
-                            transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls)
+                            transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_focus=cfg.use_salmap)
     evaldata_loader = DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
     print("# train set: %d, eval set: %d"%(len(train_data), len(eval_data)))
 
@@ -119,14 +119,14 @@ def write_logs(writer, outputs, updates):
 def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, updates):
     """ Training process for each epoch of dataset
     """
-    for i, (video_data, focus_data, coord_data, data_info) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), 
+    for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), 
                                                                                      desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         # set environment data
-        state = env.set_data(video_data, focus_data, coord_data)
+        state = env.set_data(video_data, coord_data)
         episode_reward = 0
         episode_steps = 0
         done = False
-        rnn_state = np.zeros((2, env.batch_size, cfg.SAC.hidden_size), dtype=np.float32)
+        rnn_state = np.zeros((2, cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=np.float32)
 
         while not done:
             # select action
@@ -143,13 +143,13 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
                     updates += 1
 
             # step to next state
-            next_state, reward, done, _ = env.step(action) # Step
+            next_state, reward, done, info = env.step(action) # Step
             episode_steps += 1
             episode_reward += reward
 
             # push the current step into memory
             mask = 1 if episode_steps == env.max_step else float(not done)
-            labels = np.array([env.cur_step-1, env.clsID, env.begin_accident, env.fps], dtype=np.float32)
+            labels = np.array([env.cur_step-1, env.clsID-1, env.begin_accident, env.fps], dtype=np.float32)
             memory.push(state.flatten(), action.flatten(), reward, next_state.flatten(), rnn_state.reshape(-1, cfg.SAC.hidden_size), labels, mask) # Append transition to memory
 
             # shift to next state
@@ -164,13 +164,12 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
 
 def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
     
-    for i, (video_data, focus_data, coord_data, data_info) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), 
+    for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), 
                                                                                     desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         # set environment data
-        state = env.set_data(video_data, focus_data, coord_data)
+        state = env.set_data(video_data, coord_data)
 
-        init_state = np.zeros((env.batch_size, cfg.SAC.hidden_size), dtype=np.float32)
-        rnn_state = (init_state, init_state)
+        rnn_state = np.zeros((2, cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=np.float32)
         episode_reward = 0
         episode_steps = 0
         done = False
@@ -178,7 +177,7 @@ def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
             # select action
             action, rnn_state = agent.select_action(state, rnn_state, evaluate=True)
             # step
-            next_state, reward, done, _ = env.step(action)
+            next_state, reward, done, info = env.step(action)
             episode_reward += reward
             episode_steps += 1
             # transition
@@ -193,7 +192,7 @@ def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
 def train():
 
     # initilize environment
-    env = DashCamEnv(cfg.ENV.input_shape, cfg.ENV.dim_action, cfg.ENV.dim_state, fps=30/cfg.ENV.frame_interval, device=cfg.device)
+    env = DashCamEnv(cfg.ENV, device=cfg.device)
     env.set_model(pretrained=True, weight_file=cfg.ENV.env_model)
     cfg.ENV.output_shape = env.output_shape
 
@@ -224,7 +223,8 @@ def train():
 
         # evaluate each epoch
         agent.set_status('eval')
-        eval_per_epoch(evaldata_loader, env, agent, cfg, writer, e)
+        with torch.no_grad():
+            eval_per_epoch(evaldata_loader, env, agent, cfg, writer, e)
 
     writer.close()
     env.close()
