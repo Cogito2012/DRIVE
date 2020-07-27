@@ -22,10 +22,11 @@ case ${PHASE} in
         --phase train \
         --batch_size 1 \
         --input_shape 224 224 \
-        --num_workers 6 \
+        --num_workers 0 \
         --epoch 50 \
         --gpus $GPU_IDS \
-        --output ./output/I3D
+        --train_all \
+        --output ./output_dev/I3D_all
     ;;
   test)
     # run testing

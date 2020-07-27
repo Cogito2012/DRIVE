@@ -65,6 +65,7 @@ def pre_process(data_batch, classes, len_seg=16):
     # data_info: (B, 5)
     # return: data_input: (B, 3, 16, H, W), label_input: (B, 1)
     video_data, _, coord_data, data_info = data_batch
+    video_data = video_data.to(torch.float32)
     data_input, label_input, logits = [], [], []
     for i, (video, coord, info) in enumerate(zip(video_data, coord_data, data_info)):
         # trim the video
@@ -79,29 +80,41 @@ def pre_process(data_batch, classes, len_seg=16):
         end = min(inds_ctr+int(len_seg / 2.0), end_frame)
         inds = np.linspace(start, end, len_seg).astype(np.int32)
         trimed_pos2 = video[inds].permute([1, 0, 2, 3]).unsqueeze(0)
-        # sample negative
-        if begin_frame - len_seg >= 0:
-            # sampling negative at early section
-            trimed_neg = video[begin_frame - len_seg: begin_frame].permute([1, 0, 2, 3]).unsqueeze(0)  # (1, 3, 16, H, W)
-        elif end_frame + len_seg < video.size(0):
-            # sampling negative at later section
-            trimed_neg = video[end_frame + 1: end_frame + len_seg + 1].permute([1, 0, 2, 3]).unsqueeze(0)
+        if args.with_nonaccident:
+            # sample negative
+            if begin_frame - len_seg >= 0:
+                # sampling negative at early section
+                trimed_neg = video[begin_frame - len_seg: begin_frame].permute([1, 0, 2, 3]).unsqueeze(0)  # (1, 3, 16, H, W)
+            elif end_frame + len_seg < video.size(0):
+                # sampling negative at later section
+                trimed_neg = video[end_frame + 1: end_frame + len_seg + 1].permute([1, 0, 2, 3]).unsqueeze(0)
+            else:
+                trimed_neg = torch.zeros_like(trimed_pos1)
+            sample = torch.cat([trimed_pos1, trimed_pos2, trimed_neg], dim=0)
+            # process label
+            logit_pos = torch.Tensor([classes.index(str(int(info[0].item()))) + 1]).long()
+            logit_neg = torch.zeros_like(logit_pos)
+            logit = torch.cat([logit_pos.unsqueeze(0), logit_pos.unsqueeze(0), logit_neg.unsqueeze(0)], dim=0)
+            # onehot labels
+            onehot_pos = torch.zeros((len(classes)+1))
+            onehot_pos[logit_pos] = 1
+            onehot_neg = torch.zeros((len(classes)+1))
+            onehot_neg[0] = 1
+            onehot_labels = torch.cat([onehot_pos.unsqueeze(0), onehot_pos.unsqueeze(0), onehot_neg.unsqueeze(0)], dim=0)
         else:
-            trimed_neg = torch.zeros_like(trimed_pos1)
-        data_input.append(torch.cat([trimed_pos1, trimed_pos2, trimed_neg], dim=0))  # (3, 3, 16, H, W))
+            sample = torch.cat([trimed_pos1, trimed_pos2], dim=0)
+            # process label
+            logit_pos = torch.Tensor([classes.index(str(int(info[0].item())))]).long()
+            logit = torch.cat([logit_pos.unsqueeze(0), logit_pos.unsqueeze(0)], dim=0)
+            # onehot labels
+            onehot_pos = torch.zeros((len(classes)))
+            onehot_pos[logit_pos] = 1
+            onehot_labels = torch.cat([onehot_pos.unsqueeze(0), onehot_pos.unsqueeze(0)], dim=0)
 
-        # process label
-        logit_pos = torch.Tensor([classes.index(str(int(info[0].item()))) + 1]).long()
-        logit_neg = torch.zeros_like(logit_pos)
-        logit = torch.cat([logit_pos.unsqueeze(0), logit_pos.unsqueeze(0), logit_neg.unsqueeze(0)], dim=0)
+        data_input.append(sample)  # (3, 3, 16, H, W))
         logits.append(logit)
+        label_input.append(onehot_labels)
 
-        # onehot labels
-        onehot_pos = torch.zeros((len(classes)+1))
-        onehot_pos[logit_pos] = 1
-        onehot_neg = torch.zeros((len(classes)+1))
-        onehot_neg[0] = 1
-        label_input.append(torch.cat([onehot_pos.unsqueeze(0), onehot_pos.unsqueeze(0), onehot_neg.unsqueeze(0)], dim=0))
     # prepare the input
     data_input = torch.cat(data_input, dim=0)
     label_input = torch.cat(label_input, dim=0)
@@ -121,7 +134,7 @@ def train():
     
     # setup dataset loader
     traindata_loader, evaldata_loader, accident_classes = setup_dataloader(args, isTraining=True)
-    num_classes = len(accident_classes) + 1  # we add the background class (ID=0)
+    num_classes = len(accident_classes) + 1  if args.with_nonaccident else len(accident_classes)  # we add the background class (ID=0)
 
     # I3D model
     i3d = InceptionI3d(157, in_channels=3)  # load the layers before Mixed_5c
@@ -132,9 +145,18 @@ def train():
     i3d = nn.DataParallel(i3d)
     i3d.train()
     # fix parameters before Mixed_5 block
+    for p in i3d.parameters():
+        p.requires_grad = False
     for p_name, p_obj in i3d.named_parameters():
-        if 'Mixed_5' not in p_name:
-            p_obj.requires_grad = False
+        if not args.train_all:
+            # fine tune training
+            if 'Mixed_5' in p_name:
+                p_obj.requires_grad = True
+            elif 'Logits' in p_name:
+                p_obj.requires_grad = True
+        else:
+            # train all layers
+            p_obj.requires_grad = True
     # optimizer
     optimizer = optim.SGD(filter(lambda p: p.requires_grad, i3d.parameters()), lr=args.learning_rate, momentum=0.9, weight_decay=1e-4)
     lr_sched = optim.lr_scheduler.MultiStepLR(optimizer, [30, 40])
@@ -233,6 +255,10 @@ if __name__ == "__main__":
                         help='The learning rate for fine-tuning.')
     parser.add_argument('--num_steps', type=int, default=10,
                         help='The number of forward steps for each gradient descent update')
+    parser.add_argument('--with_nonaccident', action='store_true',
+                        help='Include non-accident class.')
+    parser.add_argument('--train_all', action='store_true',
+                        help='Whether to train all layers or finetune the model.')
     args = parser.parse_args()
 
     # fix random seed 
