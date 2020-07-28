@@ -45,9 +45,9 @@ class DashCamEnv(core.Env):
         self.video_data = video_data[0].numpy()  # (T, 3, H, W)
         self.coord_data = coord_data[0].numpy()  # (T, 3)
         
-        accident_frames = np.where(self.coord_data[:, 2] > 0)[0]
-        if len(accident_frames) > 0:
-            self.max_step = accident_frames[-1]
+        accident_inds = np.where(self.coord_data[:, 2] > 0)[0]
+        if len(accident_inds) > 0:
+            self.max_step = accident_inds[-1] + 1
         else:
             self.max_step = video_data.size(1)
         
@@ -77,8 +77,9 @@ class DashCamEnv(core.Env):
 
         # observation by computing saliency
         with torch.no_grad():
-            self.cur_state = self.observe(frame_data)  # (1, 128)
-        return self.cur_state.cpu().numpy()
+            state = self.observe(frame_data)  # (1, 128)
+            self.cur_state = state.cpu().numpy()
+        return self.cur_state
 
 
     def observe(self, frame):

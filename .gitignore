@@ -147,3 +147,4 @@ metrics/saliency/code_forMetrics
 *.pt
 *.pth
 *.pth.tar
+./data/*
