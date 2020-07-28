@@ -22,7 +22,7 @@ case ${PHASE} in
         --phase train \
         --batch_size 1 \
         --input_shape 224 224 \
-        --num_workers 0 \
+        --num_workers 4 \
         --epoch 50 \
         --gpus $GPU_IDS \
         --train_all \

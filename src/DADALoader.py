@@ -8,7 +8,7 @@ from torchvision import transforms
 class DADALoader(Dataset):
     def __init__(self, root_path, phase, interval=1, min_frames=32, max_frames=-1, 
                        transforms={'image':None, 'focus': None, 'fixpt': None}, 
-                       params_norm=None, binary_cls=False, use_focus=True, use_fixation=True):
+                       params_norm=None, binary_cls=False, use_focus=True, use_fixation=True, cls_task=False):
         self.root_path = root_path
         self.phase = phase  # 'training', 'testing', 'validation'
         self.interval = interval
@@ -19,6 +19,7 @@ class DADALoader(Dataset):
         self.binary_cls = binary_cls
         self.use_focus = use_focus
         self.use_fixation = use_fixation
+        self.cls_task = cls_task
         self.fps = 30
         # the specified classes are obtained by stat.py, in which classes with two few samples are filtered out.
         self.accident_classes = ['1', '5', '6', '8', '10', '11', '12', '28', '29', '30', '34', '38', '39', '40', '46', '47', '54']
@@ -88,6 +89,7 @@ class DADALoader(Dataset):
                 frame_ids.append(fid)
                 # read video frame
                 im = cv2.imread(os.path.join(video_path, filename))
+                assert im is not None, "Read file failed! %s"%(os.path.join(video_path, filename))
                 im = cv2.cvtColor(im, cv2.COLOR_BGR2RGB)  # RGB: (660, 1584, 3)
                 video_data.append(im)
         if max_frames > 0:
@@ -215,6 +217,29 @@ class DADALoader(Dataset):
         return data_info
 
 
+    def pre_process(self, video, coord, info, min_len=16):
+        # video: (T, 3, H, W)
+        # coord: (T, 3)
+        # info: (5)
+        # return: data_input: (3, 16, H, W), label_input: (1)
+        # trim the video
+        begin_frame = np.where(coord[:, 2] > 0)[0][0]
+        end_frame = np.where(coord[:, 2] > 0)[0][-1]
+        len_seg = max(min_len, end_frame - begin_frame + 1)
+        # uniform sampling in case of too short video (less than 16 frames)
+        inds = np.linspace(begin_frame, end_frame, len_seg).astype(np.int32)
+        trimmed_video = np.transpose(video[inds], [1, 0, 2, 3])
+        
+        # process label
+        clsID = self.accident_classes.index(str(int(info[0])))
+        logit = np.array([clsID], dtype=np.int32)
+        # onehot labels
+        onehot_target = np.zeros((self.num_classes))
+        onehot_target[clsID] = 1
+
+        return trimmed_video, onehot_target, logit
+
+
     def __len__(self):
         # return the number of videos for each batch
         return len(self.data_list)
@@ -222,11 +247,11 @@ class DADALoader(Dataset):
     def __getitem__(self, index):
 
         # read video frame data, (T, H, W, C)
-        video_data, frame_ids = self.read_frames_from_images(index, interval=self.interval, max_frames=self.max_frames)
+        video_data, frame_ids = self.read_frames_from_videos(index, interval=self.interval, max_frames=self.max_frames)
+        # video_data, frame_ids = self.read_frames_from_images(index, interval=self.interval, max_frames=self.max_frames)
         # save info
         data_info = self.gather_info(index, video_data)
 
-        # video_data, frame_ids = self.read_frames_from_videos(index, interval=self.interval, max_frames=self.max_frames)
         if self.transforms['image'] is not None:
             video_data = self.transforms['image'](video_data)  # (T, C, H, W)
             if self.params_norm is not None:
@@ -235,8 +260,8 @@ class DADALoader(Dataset):
 
         if self.use_focus:
             # read focus data, (T, H, W, C)
-            focus_data = self.read_focus_from_images(frame_ids, index)
-            # focus_data = self.read_focus_from_videos(frame_ids, index)
+            # focus_data = self.read_focus_from_images(frame_ids, index)
+            focus_data = self.read_focus_from_videos(frame_ids, index)
             if self.transforms['focus'] is not None:
                 focus_data = self.transforms['focus'](focus_data)  # (T, 1, H, W)
         else:
@@ -249,6 +274,10 @@ class DADALoader(Dataset):
                 coord_data[:, :2] = self.transforms['fixpt'](coord_data[:, :2])
         else:
             coord_data = torch.empty(0)
+
+        if self.cls_task:
+            data_input, label_target, logit_target = self.pre_process(video_data.astype(np.float32), coord_data, data_info)
+            return data_input, label_target, logit_target
 
         return video_data, focus_data, coord_data, data_info
      

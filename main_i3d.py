@@ -38,21 +38,21 @@ def setup_dataloader(cfg, isTraining=True):
     # testing dataset
     if not isTraining:
         test_data = DADALoader(cfg.data_path, 'testing', interval=1, max_frames=-1, 
-                                transforms=transform_dict, params_norm=params_norm, use_focus=False)
-        testdata_loader = DataLoader(dataset=test_data, batch_size=1, shuffle=False, num_workers=cfg.num_workers)
+                                transforms=transform_dict, params_norm=params_norm, use_focus=False, cls_task=True)
+        testdata_loader = DataLoader(dataset=test_data, batch_size=1, shuffle=False, num_workers=cfg.num_workers, pin_memory=True)
         print("# test set: %d"%(len(test_data)))
         return testdata_loader
 
     # training dataset
     train_data = DADALoader(cfg.data_path, 'training', interval=cfg.frame_interval, max_frames=cfg.max_frames, 
-                            transforms=transform_dict, params_norm=params_norm, use_focus=False)
-    traindata_loader = DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers)
+                            transforms=transform_dict, params_norm=params_norm, use_focus=False, cls_task=True)
+    traindata_loader = DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, pin_memory=True)
     accident_classes = train_data.accident_classes
 
     # validataion dataset
     eval_data = DADALoader(cfg.data_path, 'validation', interval=cfg.frame_interval, max_frames=cfg.max_frames, 
-                            transforms=transform_dict, params_norm=params_norm, use_focus=False)
-    evaldata_loader = DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
+                            transforms=transform_dict, params_norm=params_norm, use_focus=False, cls_task=True)
+    evaldata_loader = DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers, pin_memory=True)
     print("# train set: %d, eval set: %d"%(len(train_data), len(eval_data)))
 
     return traindata_loader, evaldata_loader, accident_classes
@@ -158,21 +158,23 @@ def train():
             # train all layers
             p_obj.requires_grad = True
     # optimizer
-    optimizer = optim.SGD(filter(lambda p: p.requires_grad, i3d.parameters()), lr=args.learning_rate, momentum=0.9, weight_decay=1e-4)
+    optimizer = optim.SGD(filter(lambda p: p.requires_grad, i3d.parameters()), lr=args.learning_rate, momentum=0.9, weight_decay=0.0000001)
     lr_sched = optim.lr_scheduler.MultiStepLR(optimizer, [30, 40])
+    optimizer.zero_grad()
 
     steps = 0  # total number of gradient steps
     avg_loss = 0  # moving average loss
     for k in range(args.epoch):
         i3d.train()
         for i, data_batch in tqdm(enumerate(traindata_loader), total=len(traindata_loader), desc="Epoch %d [train]"%(k)):
-            data_input, label_target, _ = pre_process(data_batch, accident_classes)
-            data_input = Variable(data_input.to(device))
-            label_target = Variable(label_target.to(device))
+            # data_input, label_target, _ = pre_process(data_batch, accident_classes)
+            data_input, label_target, _ = data_batch
+            data_input = Variable(data_input).to(device)
+            label_target = Variable(label_target).to(device)
             # run forward
             predictions = i3d(data_input)
             # compute classification loss (with max-pooling along time B x C x T)
-            cls_loss = F.binary_cross_entropy_with_logits(predictions.squeeze(-1), label_target)
+            cls_loss = F.binary_cross_entropy_with_logits(torch.max(predictions, dim=2)[0], label_target)
             loss = cls_loss / args.num_steps
             loss.backward()
             avg_loss += loss.item()
@@ -196,14 +198,15 @@ def train():
         val_loss = 0
         with torch.no_grad():
             for i, data_batch in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), desc="Epoch %d [eval]"%(k)):
-                data_input, label_target, logits = pre_process(data_batch, accident_classes)
+                # data_input, label_target, logits = pre_process(data_batch, accident_classes)
+                data_input, label_target, _ = data_batch
                 data_input = data_input.to(device)
                 label_target = label_target.to(device)
                 # run forward
                 predictions = i3d(data_input)
                 # logits_pred = torch.argmax(predictions.squeeze(-1), dim=1, keepdim=True)
                 # validation loss
-                cls_loss = F.binary_cross_entropy_with_logits(predictions.squeeze(-1), label_target)
+                cls_loss = F.binary_cross_entropy_with_logits(torch.max(predictions, dim=2)[0], label_target)
                 val_loss += cls_loss.item()
                 # # append results
                 # all_preds.append(logits_pred.cpu().numpy())
@@ -242,7 +245,7 @@ if __name__ == "__main__":
                         help='random seed (default: 123)')
     parser.add_argument('--gpus', type=str, default="0", 
                         help="The delimited list of GPU IDs separated with comma. Default: '0'.")
-    parser.add_argument('--output', default='./output/I3D',
+    parser.add_argument('--output', default='./output_dev/I3D',
                         help='Directory of the output. ')
     parser.add_argument('--num_workers', type=int, default=0, 
                         help='How many sub-workers to load dataset. Default: 0')
