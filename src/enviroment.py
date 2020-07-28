@@ -19,6 +19,7 @@ class DashCamEnv(core.Env):
         self.dim_state = cfg.dim_state
         self.dim_action = cfg.dim_action
         self.fps = 30 / cfg.frame_interval
+        self.score_thresh = cfg.score_thresh
 
 
     def set_model(self, pretrained=False, weight_file=None):
@@ -39,13 +40,16 @@ class DashCamEnv(core.Env):
             coord_data: (B, T, 3), (x, y, cls)
         """ 
         assert video_data.size(0) == 1, "Only batch size == 1 is allowed!"
-        self.max_step, self.height, self.width = video_data.size(1), video_data.size(3), video_data.size(4)
-
-
+        self.height, self.width = video_data.size(3), video_data.size(4)
         # the following attributes are unchanged or ground truth of environment for an entire video
         self.video_data = video_data[0].numpy()  # (T, 3, H, W)
         self.coord_data = coord_data[0].numpy()  # (T, 3)
         
+        accident_frames = np.where(self.coord_data[:, 2] > 0)[0]
+        if len(accident_frames) > 0:
+            self.max_step = accident_frames[-1]
+        else:
+            self.max_step = video_data.size(1)
         
         cls_set = np.unique(self.coord_data[:, 2].astype(np.int32))
         if len(cls_set) > 1:
@@ -104,25 +108,6 @@ class DashCamEnv(core.Env):
         return e_x / e_x.sum(axis=0)
 
 
-    # def _exp_loss(self, pred, target, time, toa):
-    #     '''
-    #     :param pred:
-    #     :param target: onehot codings for binary classification
-    #     :param time:
-    #     :param toa:
-    #     :return:
-    #     '''
-    #     # positive example (exp_loss)
-    #     target_cls = target[:, 1]
-    #     target_cls = target_cls.to(torch.long)
-    #     penalty = -torch.max(torch.zeros_like(toa).to(toa.device, pred.dtype), toa.to(pred.dtype) - time - 1)
-    #     pos_loss = -torch.mul(torch.exp(penalty), -self.ce_loss(pred, target_cls))
-    #     # negative example
-    #     neg_loss = self.ce_loss(pred, target_cls)
-    #     loss = torch.mean(torch.add(torch.mul(pos_loss, target[:, 1]), torch.mul(neg_loss, target[:, 0])))
-    #     return loss
-
-
     def pred_to_point(self, scale_x, scale_y):
         """Transform the predicted scaling factor ranging from -1 to 1
         into the image plane with extends=[240, 320] by considering the image padding
@@ -171,8 +156,7 @@ class DashCamEnv(core.Env):
             fixation_reward = 0
 
         # compute the accident score
-        # score = self.softmax(accident_pred)[1]
-        if score > 0.5:
+        if score > self.score_thresh:
             tta_weight = (np.exp(np.maximum(self.begin_accident - self.cur_step / self.fps, 0)) - 1.0) / (np.exp(self.begin_accident) - 1.0)
             if self.clsID > 1:
                 tta_reward = 1.0 * tta_weight  # true positive
@@ -195,17 +179,18 @@ class DashCamEnv(core.Env):
         # Note that a = tanh(u) where u=FC(input), so that u=arctanh(a)=0.5*ln((1+a)/(1-a))
         # accident_pred = 0.5 * np.log((1 + action[2:]) / (1 - action[2:]) + 1e-6)
         # exp(u) = sqrt((1+a) / (1-a)) so that softmax(u) = exp(u) / sum(exp(u))
-        accident_score = np.sqrt((1 + action[2:]) / (1 - action[2:]))
-        score_pred = accident_score[1] / np.sum(accident_score)
+        # accident_score = np.sqrt((1 + action[2:]) / (1 - action[2:]))
+        # score_pred = accident_score[1] / np.sum(accident_score)
+        self.score_pred = self.softmax(action[2:])[1]
 
         info = {'next_fixation': self.next_fixation,
-                'score_pred': score_pred}
+                'score_pred': self.score_pred}
         
         if self.cur_step < self.max_step - 1:
             # next state
             next_state = self.get_next_state(self.next_fixation, self.cur_step + 1)
             # reward (immediate)
-            cur_reward = self.get_reward(self.next_fixation, score_pred) if isTraining else 0
+            cur_reward = self.get_reward(self.next_fixation, self.score_pred) if isTraining else 0
             done = False
         else:
             # The last step

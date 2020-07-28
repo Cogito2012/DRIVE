@@ -37,7 +37,8 @@ class DADALoader(Dataset):
         # loop for each type of accident
         data_list = []
         for accident in sorted(os.listdir(rgb_path)):
-            if accident not in self.accident_classes:
+            if self.cls_task and accident not in self.accident_classes:
+                # for accident classification task, we ignore categories with too few videos
                 continue
             accident_rgb_path = os.path.join(rgb_path, accident)
             for vid in sorted(os.listdir(accident_rgb_path)):
