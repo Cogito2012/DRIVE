@@ -242,7 +242,7 @@ def test():
         save_dict = save_dict.item()
     else:
         # initilize environment
-        env = DashCamEnv(cfg.ENV.input_shape, cfg.ENV.dim_action, cfg.ENV.dim_state, fps=30/cfg.ENV.frame_interval, device=cfg.device)
+        env = DashCamEnv(cfg.ENV, device=cfg.device)
         env.set_model(pretrained=True, weight_file=cfg.ENV.env_model)
         cfg.ENV.output_shape = env.output_shape
 
@@ -259,12 +259,12 @@ def test():
         # start to test 
         agent.set_status('eval')
         save_dict = {'all_preds': [], 'gt_labels': [], 'toas': [], 'vids': []}
-        for i, (video_data, focus_data, coord_data, data_info) in tqdm(enumerate(testdata_loader), total=len(testdata_loader)):  # (B, T, H, W, C)
+        for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(testdata_loader), total=len(testdata_loader)):  # (B, T, H, W, C)
             # set environment data
-            state = env.set_data(video_data, focus_data, coord_data)
+            state = env.set_data(video_data, coord_data)
 
             # init vars before each episode
-            rnn_state = np.zeros((2, env.batch_size, cfg.SAC.hidden_size), dtype=np.float32)
+            rnn_state = np.zeros((2, cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=np.float32)
             episode_reward = 0
             done = False
             pred_scores = []
