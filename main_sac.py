@@ -119,6 +119,7 @@ def write_logs(writer, outputs, updates):
 def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, updates):
     """ Training process for each epoch of dataset
     """
+    reward_total = 0
     for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), 
                                                                                      desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         # set environment data
@@ -157,13 +158,17 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
 
         i_episode = epoch * len(traindata_loader) + i
         avg_reward = episode_reward / episode_steps
-        writer.add_scalar('reward_avg/train', avg_reward, i_episode)
+        writer.add_scalar('reward/train_per_video', avg_reward, i_episode)
+
+        reward_total += episode_reward
+    writer.add_scalar('reward/train_per_epoch', reward_total, epoch)
 
     return updates
 
 
 def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
     
+    total_reward = 0
     for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), 
                                                                                     desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         # set environment data
@@ -186,7 +191,10 @@ def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
         # logging
         i_episode = epoch * len(evaldata_loader) + i
         avg_reward = episode_reward / episode_steps
-        writer.add_scalar('reward_avg/test', avg_reward, i_episode)
+        writer.add_scalar('reward/test_per_video', avg_reward, i_episode)
+
+        total_reward += episode_reward
+    writer.add_scalar('reward/test_per_epoch', total_reward, epoch)
 
 
 def train():

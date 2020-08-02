@@ -173,7 +173,7 @@ class DashCamEnv(core.Env):
 
 
     def step(self, action, isTraining=True):
-        """ action: (4)
+        """ action: (3)
         """
         # actions input, range from -1 to 1
         self.next_fixation = self.pred_to_point(action[0], action[1])
@@ -182,7 +182,9 @@ class DashCamEnv(core.Env):
         # exp(u) = sqrt((1+a) / (1-a)) so that softmax(u) = exp(u) / sum(exp(u))
         # accident_score = np.sqrt((1 + action[2:]) / (1 - action[2:]))
         # score_pred = accident_score[1] / np.sum(accident_score)
-        self.score_pred = self.softmax(action[2:])[1]
+
+        # self.score_pred = self.softmax(action[2])[1]
+        self.score_pred = 0.5 * (action[2] + 1.0)  # map to [0, 1]
 
         info = {'next_fixation': self.next_fixation,
                 'score_pred': self.score_pred}

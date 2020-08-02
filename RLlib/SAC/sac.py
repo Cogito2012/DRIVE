@@ -34,16 +34,16 @@ class SAC(object):
                 self.alpha_optim = Adam([self.log_alpha], lr=cfg.lr)
 
             self.policy = GaussianPolicy(num_inputs, dim_action, cfg.hidden_size).to(self.device)
-            self.policy_optim = Adam(self.policy.parameters(), lr=cfg.lr)
+            self.policy_optim = Adam(self.policy.parameters(), lr=cfg.lr, weight_decay=cfg.policy_weight_decay)
 
         else:
             self.alpha = 0
             self.automatic_entropy_tuning = False
             self.policy = DeterministicPolicy(num_inputs, dim_action, cfg.hidden_size).to(self.device)
-            self.policy_optim = Adam(self.policy.parameters(), lr=cfg.lr)
+            self.policy_optim = Adam(self.policy.parameters(), lr=cfg.lr, weight_decay=cfg.policy_weight_decay)
         
-        self.ce_loss = torch.nn.CrossEntropyLoss(reduction='none')
-        # self.nll_loss = torch.nn.NLLLoss(reduction='none')
+        # self.ce_loss = torch.nn.CrossEntropyLoss(reduction='none')
+        self.nll_loss = torch.nn.NLLLoss(reduction='none')
 
     
     def set_status(self, phase='train'):
@@ -112,7 +112,7 @@ class SAC(object):
         # # accident_pred = 0.5 * torch.log((1 + pi[:, 2:]) / (1 - pi[:, 2:]) + 1e-6)
         # accident_score = torch.sqrt((1 + pi[:, 2:]) / (1 - pi[:, 2:]))
         # score_pred = accident_score / torch.sum(accident_score, dim=1, keepdim=True)
-        score_pred = pi[:, 2:]
+        score_pred = 0.5 * (pi[:, 2] + 1.0)
 
         steps_batch, clsID_batch, toa_batch, fps_batch = labels_batch[:, 0], labels_batch[:, 1], labels_batch[:, 2], labels_batch[:, 3]
         task_target = torch.zeros(batch_size, self.num_classes).to(self.device)
@@ -177,6 +177,7 @@ class SAC(object):
         :param toa:
         :return:
         '''
+        pred = torch.cat([(1.0 - pred).unsqueeze(1), pred.unsqueeze(1)], dim=1)
         # positive example (exp_loss)
         target_cls = target[:, 1]
         target_cls = target_cls.to(torch.long)
@@ -184,10 +185,10 @@ class SAC(object):
         penalty = -torch.max(torch.zeros_like(toa).to(toa.device, pred.dtype), toa.to(pred.dtype) - time - 1)
         penalty = torch.where(toa > 0, penalty, torch.zeros_like(penalty).to(pred.device))
 
-        pos_loss = -torch.mul(torch.exp(penalty), -self.ce_loss(pred, target_cls))
-        # pos_loss = -torch.mul(torch.exp(penalty), -self.nll_loss(torch.log(pred + 1e-6), target_cls))
+        # pos_loss = -torch.mul(torch.exp(penalty), -self.ce_loss(pred, target_cls))
+        pos_loss = -torch.mul(torch.exp(penalty), -self.nll_loss(torch.log(pred + 1e-6), target_cls))
         # negative example
-        neg_loss = self.ce_loss(pred, target_cls)
-        # neg_loss = self.nll_loss(torch.log(pred + 1e-6), target_cls)
+        # neg_loss = self.ce_loss(pred, target_cls)
+        neg_loss = self.nll_loss(torch.log(pred + 1e-6), target_cls)
         loss = torch.mean(torch.add(torch.mul(pos_loss, target[:, 1]), torch.mul(neg_loss, target[:, 0])))
         return loss
