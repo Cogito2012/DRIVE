@@ -19,7 +19,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from src.enviroment import DashCamEnv
 from RLlib.SAC.sac import SAC
-from src.eval_tools import evaluation_dynamic
+from metrics.eval_tools import evaluation_accident
 
 class ReplayMemory:
     def __init__(self, capacity):
@@ -266,7 +266,7 @@ def test():
 
         # start to test 
         agent.set_status('eval')
-        save_dict = {'all_preds': [], 'gt_labels': [], 'toas': [], 'vids': []}
+        save_dict = {'score_preds': [], 'fix_preds': [], 'gt_labels': [], 'gt_fixes': [], 'toas': [], 'vids': []}
         for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(testdata_loader), total=len(testdata_loader)):  # (B, T, H, W, C)
             # set environment data
             state = env.set_data(video_data, coord_data)
@@ -275,13 +275,16 @@ def test():
             rnn_state = np.zeros((2, cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=np.float32)
             episode_reward = 0
             done = False
-            pred_scores = []
+            pred_scores, pred_fixes = [], []
             while not done:
                 # select action
                 action, rnn_state = agent.select_action(state, rnn_state, evaluate=True)
                 next_fixation = env.pred_to_point(action[0], action[1])
-                accident_pred = action[2:]
-                score = np.exp(accident_pred[1]) / np.sum(np.exp(accident_pred))
+                pred_fixes.append(next_fixation)
+                # accident_pred = action[2:]
+                # score = np.exp(accident_pred[1]) / np.sum(np.exp(accident_pred))
+                # pred_scores.append(score)
+                score = 0.5 * (action[2] + 1.0)
                 pred_scores.append(score)
 
                 # step
@@ -289,22 +292,27 @@ def test():
                 episode_reward += reward
                 # transition
                 state = next_state
+            gt_fixes = env.coord_data[:, :2]
             # save results
-            save_dict['all_preds'].append(np.array(pred_scores, dtype=np.float32))
+            save_dict['score_preds'].append(np.array(pred_scores, dtype=np.float32))
+            save_dict['fix_preds'].append(np.array(pred_fixes, dtype=np.float32))
             save_dict['gt_labels'].append(env.clsID)
+            save_dict['gt_fixes'].append(gt_fixes)
             save_dict['toas'].append(env.begin_accident)
             save_dict['vids'].append(data_info[0, 1])
             
         np.save(result_file, save_dict)
 
     # evaluate the results
-    all_pred = save_dict['all_preds']
-    all_labels = save_dict['gt_labels']
-    all_toas = save_dict['toas']
-    all_fps = [30/cfg.ENV.frame_interval] * len(all_labels)
-    AP, mTTA, TTA_R80 = evaluation_dynamic(all_pred, all_labels, all_toas, all_fps)
+    score_preds = save_dict['score_preds']
+    gt_labels = save_dict['gt_labels']
+    toas = save_dict['toas']
+    all_fps = [30/cfg.ENV.frame_interval] * len(gt_labels)
+    AP, mTTA, TTA_R80 = evaluation_accident(score_preds, gt_labels, toas, all_fps)
     # print
     print("AP = %.4f, mean TTA = %.4f, TTA@0.8 = %.4f"%(AP, mTTA, TTA_R80))
+    mse_fix = evaluation_fixation(save_dict['fix_preds'], save_dict['gt_fixes'])
+    print('Fixation Prediction MSE=%.4f'%(mse_fix))
 
 
 if __name__ == "__main__":
