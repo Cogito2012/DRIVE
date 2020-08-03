@@ -19,7 +19,7 @@ from torch.utils.tensorboard import SummaryWriter
 
 from src.enviroment import DashCamEnv
 from RLlib.SAC.sac import SAC
-from metrics.eval_tools import evaluation_accident
+from metrics.eval_tools import evaluation_accident, evaluation_fixation
 
 class ReplayMemory:
     def __init__(self, capacity):

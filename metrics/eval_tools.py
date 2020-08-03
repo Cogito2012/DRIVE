@@ -79,12 +79,11 @@ def evaluation_accident(all_pred, all_labels, all_toas, all_fps):
 def evaluation_fixation(preds, labels, metric='mse'):
     """Evaluate the Mean Squared Error for fixation prediction
     """
-    labels = np.delete(labels, 0, axis=0)  # delete the first row
     mse_result = []
     for i, gt_fixes in enumerate(labels):
         inds = np.where(gt_fixes[:, 0] > 0)[0]
         if len(inds) > 0:  # ignore the non-accident frames
-            pred_fix = preds[inds, :]
+            pred_fix = preds[i][inds, :]
             gt_fix = gt_fixes[inds, :]
             mse = np.mean(np.sqrt(np.sum(np.square(pred_fix - gt_fix), axis=1)), axis=0)
             mse_result.append(mse)
