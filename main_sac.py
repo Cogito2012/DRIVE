@@ -308,7 +308,8 @@ def test():
     gt_labels = save_dict['gt_labels']
     toas = save_dict['toas']
     all_fps = [30/cfg.ENV.frame_interval] * len(gt_labels)
-    AP, mTTA, TTA_R80 = evaluation_accident(score_preds, gt_labels, toas, all_fps)
+    vis_file = os.path.join(output_dir, 'PRCurve_SAC.png')
+    AP, mTTA, TTA_R80 = evaluation_accident(score_preds, gt_labels, toas, all_fps, draw_curves=True, vis_file=vis_file)
     # print
     print("AP = %.4f, mean TTA = %.4f, TTA@0.8 = %.4f"%(AP, mTTA, TTA_R80))
     mse_fix = evaluation_fixation(save_dict['fix_preds'], save_dict['gt_fixes'])

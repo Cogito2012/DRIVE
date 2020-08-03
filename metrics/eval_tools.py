@@ -1,45 +1,75 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import os
-from scipy.interpolate import make_interp_spline\
+from scipy.interpolate import make_interp_spline
 
 
-def evaluation_accident(all_pred, all_labels, all_toas, all_fps):
+def draw_pr_curves(precisions, recalls, time_to_accidents, legend_text, vis_file):
+    plt.figure(figsize=(10,5))
+    fontsize = 18
+    plt.plot(recalls, precisions, 'r-')
+    plt.axvline(x=0.8, ymax=1.0, linewidth=2.0, color='k', linestyle='--')
+    plt.xlabel('Recall', fontsize=fontsize)
+    plt.ylabel('Precision', fontsize=fontsize)
+    plt.ylim([0.0, 1.0])
+    plt.xlim([0.0, 1.0])
+    plt.xticks(fontsize=fontsize)
+    plt.yticks(fontsize=fontsize)
+    # plt.title('Precision Recall Curves', fontsize=fontsize)
+    plt.legend([legend_text], fontsize=fontsize)
+    plt.grid(True)
+    plt.tight_layout()
+    plt.savefig(vis_file)
+
+
+def compute_metrics(all_pred, all_toas, all_fps, thresh):
+    Ntp, Ntn, Nfp, Nfn = 0, 0, 0, 0
+    tta = 0  # time to accident
+    Nvid_tp = 0  # number of true positive videos
+    # iterate results of each video
+    for vid, pred in enumerate(all_pred):
+        n_frames = pred.shape[0]
+        toa = all_toas[vid]
+        fps = all_fps[vid]
+        pos = np.sum((pred > thresh).astype(np.int))
+        if toa < n_frames and toa >= 0:
+            Ntp += pos             # true positive
+            Nfn += n_frames - pos  # false negative
+            if pos > 0:
+                # time of accident (clipped to larger than 0), unit: second
+                tta += np.maximum(0, toa - np.where(pred > thresh)[0][0]) / fps
+                Nvid_tp += 1
+        else:
+            Nfp += pos             # false positive
+            Ntn += n_frames - pos  # true negative
+    
+    precision = Ntp / (Ntp + Nfp) if Ntp + Nfp > 0 else 0
+    recall = Ntp / (Ntp + Nfn) if Ntp + Nfn > 0 else 0
+    mtta = tta / Nvid_tp if Nvid_tp > 0 else 0
+    return precision, recall, mtta
+
+
+def evaluation_accident(all_pred, all_labels, all_toas, all_fps, draw_curves=False, vis_file=None):
     """
     all_pred: list, (N_videos, N_frames) a list of ndarray
     all_labels: list, (N_videos,)
     all_toas: list, (N_videos)
     all_fps: list, (N_videos)
     """
-    thresholds = np.arange(0, 1.01, 0.01)
+    # find the minimum predicted score
+    min_pred = np.inf
+    for pred in all_pred:
+        if min_pred > np.min(pred):
+            min_pred = np.min(pred)
+
+    # thresholds = np.arange(0, 1.01, 0.01)
+    thresholds = np.arange(max(min_pred, 0), 1.0, 0.001)
     precisions = np.zeros((len(thresholds)), dtype=np.float32)
     recalls = np.zeros((len(thresholds)), dtype=np.float32)
     mean_toas = np.zeros((len(thresholds)), dtype=np.float32)
 
     for i, thresh in enumerate(thresholds):
-        Ntp, Ntn, Nfp, Nfn = 0, 0, 0, 0
-        tta = 0  # time to accident
-        Nvid_tp = 0  # number of true positive videos
-        # iterate results of each video
-        for vid, pred in enumerate(all_pred):
-            n_frames = pred.shape[0]
-            toa = all_toas[vid]
-            fps = all_fps[vid]
-            pos = np.sum((pred > thresh).astype(np.int))
-            if toa < n_frames and toa >= 0:
-                Ntp += pos             # true positive
-                Nfn += n_frames - pos  # false negative
-                if pos > 0:
-                    # time of accident (clipped to larger than 0), unit: second
-                    tta += np.maximum(0, toa - np.where(pred > thresh)[0][0]) / fps
-                    Nvid_tp += 1
-            else:
-                Nfp += pos             # false positive
-                Ntn += n_frames - pos  # true negative
-        
-        precisions[i] = Ntp / (Ntp + Nfp) if Ntp + Nfp > 0 else 0
-        recalls[i] = Ntp / (Ntp + Nfn) if Ntp + Nfn > 0 else 0
-        mean_toas[i] = tta / Nvid_tp if Nvid_tp > 0 else 0
+        precisions[i], recalls[i], mean_toas[i] = compute_metrics(all_pred, all_toas, all_fps, thresh)
 
     # sort the results with recall
     inds = np.argsort(recalls)
@@ -71,7 +101,14 @@ def evaluation_accident(all_pred, all_labels, all_toas, all_fps):
     sort_time = new_toas[np.argsort(new_recalls)]
     sort_recall = np.sort(new_recalls)
     TTA_R80 = sort_time[np.argmin(np.abs(sort_recall-0.8))]
+
+    if draw_curves:
+        assert vis_file is not None, "vis_file is not specified!"
+        legend_text = 'SAC Gaussian (AP=%.2f%%)'%(AP * 100)
+        draw_pr_curves(new_precisions, new_recalls, new_toas, legend_text, vis_file)
     
+    p05, r05, t05 = compute_metrics(all_pred, all_toas, all_fps, 0.5)
+    print("\nprecision@0.5 = %.4f, recall@0.5 = %.4f, TTA@0.5 = %.4f\n"%(p05, r05, t05))
     return AP, mTTA, TTA_R80
 
 
