@@ -20,6 +20,7 @@ class DashCamEnv(core.Env):
         self.dim_action = cfg.dim_action
         self.fps = 30 / cfg.frame_interval
         self.score_thresh = cfg.score_thresh
+        self.state_norm = cfg.state_norm
 
 
     def set_model(self, pretrained=False, weight_file=None):
@@ -93,6 +94,8 @@ class DashCamEnv(core.Env):
         max_pool = F.max_pool2d(state, kernel_size=state.size()[2:])
         avg_pool = F.avg_pool2d(state, kernel_size=state.size()[2:])
         state = torch.cat([max_pool, avg_pool], dim=1).squeeze_(dim=-1).squeeze_(dim=-1)  # (1, 128)
+        if self.state_norm:
+            state = F.normalize(state, p=2, dim=1)
         return state
 
 

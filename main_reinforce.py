@@ -109,15 +109,17 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch):
             labels.append(np.array([env.cur_step-1, env.clsID-1, env.begin_accident, env.fps], dtype=np.float32))
 
         labels = np.array(labels, dtype=np.float32)
-        total_loss, policy_loss, task_loss = agent.update_parameters(rewards, log_probs, entropies, states, rnn_state, labels, cfg.REINFORCE)
+        losses = agent.update_parameters(rewards, log_probs, entropies, states, rnn_state, labels, cfg.REINFORCE)
 
         avg_reward = np.sum(rewards) / len(rewards)
         reward_total += np.sum(rewards)
 
         i_episode = epoch * len(traindata_loader) + i
-        writer.add_scalar('loss/total_loss', total_loss, i_episode)
-        writer.add_scalar('loss/policy_loss', policy_loss, i_episode)
-        writer.add_scalar('loss/task_loss', task_loss, i_episode)
+        writer.add_scalar('loss/total_loss', losses['total'], i_episode)
+        writer.add_scalar('loss/policy_loss', losses['policy'], i_episode)
+        writer.add_scalar('loss/task_loss', losses['task'], i_episode)
+        if agent.with_baseline:
+            writer.add_scalar('loss/advantage_loss', losses['advantage'], i_episode)
         writer.add_scalar('reward/train_per_video', avg_reward, i_episode)
 
     writer.add_scalar('reward/train_per_epoch', reward_total, epoch)

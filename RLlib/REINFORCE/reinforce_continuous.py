@@ -60,15 +60,35 @@ class Policy(nn.Module):
         return mu, sigma_sq, rnn_state_new
 
 
+class ValueEstimator(nn.Module):
+    def __init__(self, hidden_size, num_inputs, num_outputs):
+        super(ValueEstimator, self).__init__()
+
+        self.linear1 = nn.Linear(num_inputs, hidden_size)
+        self.linear2 = nn.Linear(hidden_size, num_outputs)
+        self.apply(weights_init_)  # initialize params
+
+    def forward(self, inputs):
+        x = inputs
+        x = F.relu(self.linear1(x))
+        output = self.linear2(x)
+        return output
+
+
 class REINFORCE:
     def __init__(self, num_inputs, dim_action, cfg, device=torch.device("cuda")):
-        self.policy_model = Policy(cfg.hidden_size, num_inputs, dim_action)
+        self.policy_model = Policy(cfg.hidden_size, num_inputs, dim_action).to(device)
+        self.optimizer = optim.Adam(self.policy_model.parameters(), lr=cfg.lr)
         self.device = device
-        self.policy_model = self.policy_model.to(device)
-        self.optimizer = optim.Adam(self.policy_model.parameters(), lr=1e-3)
         self.num_classes = cfg.num_classes
+        self.with_baseline = cfg.with_baseline
         # self.ce_loss = torch.nn.CrossEntropyLoss(reduction='none')
         self.nll_loss = torch.nn.NLLLoss(reduction='none')
+
+        if self.with_baseline:
+            self.value_estimator = ValueEstimator(cfg.hidden_size, num_inputs, 1).to(device)
+            self.advantage_loss = torch.nn.MSELoss(reduction='none')
+            self.value_optimizer = optim.Adam(self.value_estimator.parameters(), lr=cfg.lr_adv)
         
 
     def select_action(self, state, rnn_state=None, with_grad=False):
@@ -103,31 +123,51 @@ class REINFORCE:
 
     def update_parameters(self, rewards, log_probs, entropies, states, rnn_state, labels, cfg):
         R = torch.zeros(1, 1)
-        policy_loss = 0
+        policy_loss, adv_loss = 0, 0
         horizon = len(rewards)
         actions = []
         for i in reversed(range(horizon)):
             # compute discounted return
             R = cfg.gamma * R + rewards[i]
+            if self.with_baseline:
+                # compute the baseline
+                state = Variable(torch.from_numpy(states[i])).to(self.device)
+                baseline = self.value_estimator(state)
+                adv_loss += self.advantage_loss(baseline, Variable(R).to(self.device))
+                R -= baseline.detach().cpu().numpy()  # advantage
+            # total loss
+            policy_loss = policy_loss - (log_probs[i]*(Variable(R).expand_as(log_probs[i])).to(self.device)).sum() - (cfg.alpha * entropies[i]).sum()
+
             # get the action with grad
-            # state = Variable(torch.from_numpy(states[i-horizon+1])).to(self.device)
             state = states[i-horizon+1]
             action, _, _, rnn_state = self.select_action(state, rnn_state, with_grad=True)
             actions.append(action)
-            # total loss
-            policy_loss = policy_loss - (log_probs[i]*(Variable(R).expand_as(log_probs[i])).to(self.device)).sum() - (cfg.alpha * entropies[i]).sum()
+
         policy_loss = policy_loss / len(rewards)
+        adv_loss = adv_loss / len(rewards)
+
+        if self.with_baseline:
+            # update value estimator
+            self.value_optimizer.zero_grad()
+            adv_loss.backward()
+            utils.clip_grad_norm_(self.value_estimator.parameters(), 40)
+            self.value_optimizer.step()
 		
         # compute time-to-accident losses
         task_loss = self.compute_task_loss(actions, labels)
         total_loss = cfg.beta * policy_loss + task_loss
-
+        # update policy model
         self.optimizer.zero_grad()
         total_loss.backward()
         utils.clip_grad_norm_(self.policy_model.parameters(), 40)
         self.optimizer.step()
 
-        return total_loss, policy_loss, task_loss
+        # gather losses
+        losses = {'total': total_loss, 'policy': policy_loss, 'task': task_loss}
+        if self.with_baseline:
+            losses.update({'advantage': adv_loss})
+
+        return losses
 
 
     def compute_task_loss(self, actions, labels):
