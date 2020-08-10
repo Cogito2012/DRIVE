@@ -53,6 +53,8 @@ def parse_configs():
                         help='random seed (default: 123)')
     parser.add_argument('--num_epoch', type=int, default=50, metavar='N',
                         help='number of epoches (default: 50)')
+    parser.add_argument('--test_epoch', type=int, default=-1, 
+                        help='The snapshot id of trained model for testing.')
     parser.add_argument('--output', default='./output/SAC',
                         help='Directory of the output. ')
     args = parser.parse_args()

@@ -157,8 +157,11 @@ class SAC(object):
         
 
     def load_models(self, ckpt_dir, cfg):
-        filename = sorted(os.listdir(ckpt_dir))[-1]
-        weight_file = os.path.join(cfg.output, 'checkpoints', filename)
+        if cfg.test_epoch == -1:
+            filename = sorted(os.listdir(ckpt_dir))[-1]
+            weight_file = os.path.join(cfg.output, 'checkpoints', filename)
+        else:
+            weight_file = os.path.join(cfg.output, 'checkpoints', 'sac_epoch_' + str(cfg.test_epoch) + '.pt')
         if os.path.isfile(weight_file):
             checkpoint = torch.load(weight_file)
             self.policy.load_state_dict(checkpoint['policy_model'])
