@@ -1,0 +1,22 @@
+ENV:
+  data_path: ./data/DADA-2000
+  batch_size: 1
+  image_shape: [660, 1584]
+  input_shape: [480, 640]
+  frame_interval: 5
+  max_frames: -1
+  binary_cls: true
+  num_workers: 4
+  dim_state: 128
+  dim_action: 3
+  score_thresh: 0.7
+  use_salmap: False  # set to False to speedup data loading
+  use_foveation: True
+  env_model: ./output/saliency/checkpoints/saliency_model_25.pth
+REINFORCE:
+  gamma: 0.99
+  alpha: 0.001
+  beta: 0.01
+  hidden_size: 64  # it's better to be less than dim_state
+  num_classes: 2
+  
