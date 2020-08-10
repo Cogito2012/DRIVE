@@ -10,8 +10,9 @@ ENV:
   dim_state: 128
   dim_action: 3
   score_thresh: 0.7
-  use_salmap: False  # set to False to speedup data loading
-  use_foveation: True
+  use_salmap: false  # set to False to speedup data loading
+  use_foveation: true
+  state_norm: false
   env_model: ./output/saliency/checkpoints/saliency_model_25.pth
 SAC:
   gamma: 0.99
@@ -21,7 +22,7 @@ SAC:
   hidden_size: 256
   policy: "Deterministic"
   target_update_interval: 1000
-  automatic_entropy_tuning: True
+  automatic_entropy_tuning: true
   alpha: 0.001
   beta: 0.01
   replay_size: 1000000
