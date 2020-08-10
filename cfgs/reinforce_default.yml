@@ -10,8 +10,8 @@ ENV:
   dim_state: 128
   dim_action: 3
   score_thresh: 0.7
-  use_salmap: False  # set to False to speedup data loading
-  use_foveation: True
+  use_salmap: false  # set to False to speedup data loading
+  use_foveation: true
   env_model: ./output/saliency/checkpoints/saliency_model_25.pth
 REINFORCE:
   gamma: 0.99
@@ -19,4 +19,5 @@ REINFORCE:
   beta: 0.01
   hidden_size: 64  # it's better to be less than dim_state
   num_classes: 2
+  use_lstm: true
   

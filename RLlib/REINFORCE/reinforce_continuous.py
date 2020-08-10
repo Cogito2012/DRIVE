@@ -15,6 +15,18 @@ pi = Variable(torch.FloatTensor([math.pi])).cuda()
 LOG_SIG_MAX = 2
 LOG_SIG_MIN = -20
 
+# Initialize Policy weights
+def weights_init_(m):
+    if isinstance(m, nn.Linear):
+        torch.nn.init.xavier_uniform_(m.weight, gain=1)
+        torch.nn.init.constant_(m.bias, 0)
+    if isinstance(m, nn.LSTMCell):
+        for param in m.parameters():
+            if len(param.shape) >= 2:
+                torch.nn.init.orthogonal_(param.data)
+            else:
+                torch.nn.init.normal_(param.data)
+
 
 def normal(x, mu, sigma_sq):
     a = (-1*(Variable(x)-mu).pow(2)/(2*sigma_sq)).exp()
@@ -27,18 +39,25 @@ class Policy(nn.Module):
         super(Policy, self).__init__()
 
         self.linear1 = nn.Linear(num_inputs, hidden_size)
+        self.lstm_cell = nn.LSTMCell(hidden_size, hidden_size)
         # predict orientation
         self.linear_mu = nn.Linear(hidden_size, num_outputs)
         self.linear_sigma = nn.Linear(hidden_size, num_outputs)
+        self.apply(weights_init_)  # initialize params
 
-    def forward(self, inputs):
+    def forward(self, inputs, rnn_state=None):
         x = inputs
         x = F.relu(self.linear1(x))
+        rnn_state_new = None
+        if rnn_state is not None:
+            rnn_state_new = self.lstm_cell(x, rnn_state)
+            x = rnn_state_new[0].clone()  # fetch hidden states as x
+
         mu = self.linear_mu(x)
         sigma_sq = self.linear_sigma(x)
         sigma_sq = torch.clamp(sigma_sq, min=2 * LOG_SIG_MIN, max=2 * LOG_SIG_MAX)
 
-        return mu, sigma_sq
+        return mu, sigma_sq, rnn_state_new
 
 
 class REINFORCE:
@@ -52,12 +71,15 @@ class REINFORCE:
         self.nll_loss = torch.nn.NLLLoss(reduction='none')
         
 
-    def select_action(self, state, with_grad=False):
+    def select_action(self, state, rnn_state=None, with_grad=False):
         """
         state: (1, 128)
         """
         state = Variable(torch.from_numpy(state)).to(self.device)
-        mu, sigma_sq = self.policy_model(state)
+        if rnn_state is not None:
+            rnn_state = (rnn_state[0], rnn_state[1])
+
+        mu, sigma_sq, rnn_state = self.policy_model(state, rnn_state)
         sigma_sq = F.softplus(sigma_sq)
 
         eps = Variable(torch.randn(mu.size())).to(self.device)
@@ -76,10 +98,10 @@ class REINFORCE:
         entropy = -0.5*((sigma_sq + 2*pi.expand_as(sigma_sq)).log() + 1)
 
         action_out = action if with_grad else action[0].detach().cpu().numpy()
-        return action_out, log_prob, entropy
+        return action_out, log_prob, entropy, rnn_state
 
 
-    def update_parameters(self, rewards, log_probs, entropies, states, labels, cfg):
+    def update_parameters(self, rewards, log_probs, entropies, states, rnn_state, labels, cfg):
         R = torch.zeros(1, 1)
         policy_loss = 0
         horizon = len(rewards)
@@ -90,7 +112,7 @@ class REINFORCE:
             # get the action with grad
             # state = Variable(torch.from_numpy(states[i-horizon+1])).to(self.device)
             state = states[i-horizon+1]
-            action, _, _ = self.select_action(state, with_grad=True)
+            action, _, _, rnn_state = self.select_action(state, rnn_state, with_grad=True)
             actions.append(action)
             # total loss
             policy_loss = policy_loss - (log_probs[i]*(Variable(R).expand_as(log_probs[i])).to(self.device)).sum() - (cfg.alpha * entropies[i]).sum()

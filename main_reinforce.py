@@ -8,6 +8,7 @@ from RLlib.REINFORCE.reinforce_continuous import REINFORCE
 import torch
 from torch.utils.data import DataLoader
 from torchvision import transforms
+from torch.autograd import Variable
 
 from src.DADALoader import DADALoader
 from src.data_transform import ProcessImages, ProcessFixations
@@ -91,11 +92,13 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch):
         state = env.set_data(video_data, coord_data)
         entropies, log_probs, rewards, states, labels = [], [], [], [], []
         done = False
+        rnn_state = Variable(torch.zeros((2, cfg.ENV.batch_size, cfg.REINFORCE.hidden_size))).to(cfg.device) if cfg.REINFORCE.use_lstm else None
+
         # run each time step
         while not done:
             states.append(state)
             # select action
-            action, log_prob, entropy = agent.select_action(state)
+            action, log_prob, entropy, rnn_state = agent.select_action(state, rnn_state)
             # state transition
             state, reward, done, info = env.step(action)
             
@@ -106,7 +109,7 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch):
             labels.append(np.array([env.cur_step-1, env.clsID-1, env.begin_accident, env.fps], dtype=np.float32))
 
         labels = np.array(labels, dtype=np.float32)
-        total_loss, policy_loss, task_loss = agent.update_parameters(rewards, log_probs, entropies, states, labels, cfg.REINFORCE)
+        total_loss, policy_loss, task_loss = agent.update_parameters(rewards, log_probs, entropies, states, rnn_state, labels, cfg.REINFORCE)
 
         avg_reward = np.sum(rewards) / len(rewards)
         reward_total += np.sum(rewards)
@@ -129,9 +132,11 @@ def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
         state = env.set_data(video_data, coord_data)
         rewards = []
         done = False
+        rnn_state = torch.zeros((2, cfg.ENV.batch_size, cfg.REINFORCE.hidden_size)).to(cfg.device) if cfg.REINFORCE.use_lstm else None
+
         while not done:
             # select action
-            action, log_prob, entropy = agent.select_action(state)
+            action, log_prob, entropy, rnn_state = agent.select_action(state, rnn_state)
             # state transition
             state, reward, done, info = env.step(action)
             rewards.append(reward)
