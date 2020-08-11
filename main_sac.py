@@ -109,13 +109,13 @@ def setup_dataloader(cfg, isTraining=True):
 
 def write_logs(writer, outputs, updates):
     """Write the logs to tensorboard"""
-    critic_1_loss, critic_2_loss, policy_loss, ent_loss, alpha, task_loss = outputs
-    writer.add_scalar('loss/critic_1', critic_1_loss, updates)
-    writer.add_scalar('loss/critic_2', critic_2_loss, updates)
-    writer.add_scalar('loss/policy', policy_loss, updates)
-    writer.add_scalar('loss/entropy_loss', ent_loss, updates)
-    writer.add_scalar('loss/task_loss', task_loss, updates)
-    writer.add_scalar('entropy_temprature/alpha', alpha, updates)
+    losses, alpha_values = outputs
+    writer.add_scalar('loss/critic', losses['critic'], updates)
+    writer.add_scalar('loss/actor', losses['actor'], updates)
+    writer.add_scalar('loss/cls', losses['cls'], updates)
+    writer.add_scalar('loss/fixation', losses['fixation'], updates)
+    writer.add_scalar('loss/policy_total', fixation['policy_total'], updates)
+    writer.add_scalar('temprature/alpha', alpha_values, updates)
 
 
 def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, updates):
@@ -152,15 +152,16 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
 
             # push the current step into memory
             mask = 1 if episode_steps == env.max_step else float(not done)
-            labels = np.array([env.cur_step-1, env.clsID-1, env.begin_accident, env.fps], dtype=np.float32)
+            gt_fix_next = info['gt_fixation']
+            labels = np.array([env.cur_step-1, env.clsID-1, env.begin_accident, env.fps, gt_fix_next[0], gt_fix_next[1]], dtype=np.float32)
             memory.push(state.flatten(), action.flatten(), reward, next_state.flatten(), rnn_state.reshape(-1, cfg.SAC.hidden_size), labels, mask) # Append transition to memory
 
             # shift to next state
             state = next_state.copy()
 
-        i_episode = epoch * len(traindata_loader) + i
-        avg_reward = episode_reward / episode_steps
-        writer.add_scalar('reward/train_per_video', avg_reward, i_episode)
+        # i_episode = epoch * len(traindata_loader) + i
+        # avg_reward = episode_reward / episode_steps
+        # writer.add_scalar('reward/train_per_video', avg_reward, i_episode)
 
         reward_total += episode_reward
     writer.add_scalar('reward/train_per_epoch', reward_total, epoch)
@@ -191,9 +192,9 @@ def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
             state = next_state
         
         # logging
-        i_episode = epoch * len(evaldata_loader) + i
-        avg_reward = episode_reward / episode_steps
-        writer.add_scalar('reward/test_per_video', avg_reward, i_episode)
+        # i_episode = epoch * len(evaldata_loader) + i
+        # avg_reward = episode_reward / episode_steps
+        # writer.add_scalar('reward/test_per_video', avg_reward, i_episode)
 
         total_reward += episode_reward
     writer.add_scalar('reward/test_per_epoch', total_reward, epoch)
@@ -275,7 +276,6 @@ def test():
 
             # init vars before each episode
             rnn_state = np.zeros((2, cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=np.float32)
-            episode_reward = 0
             done = False
             pred_scores, pred_fixes = [], []
             while not done:
@@ -291,7 +291,6 @@ def test():
 
                 # step
                 next_state, reward, done, _ = env.step(action)
-                episode_reward += reward
                 # transition
                 state = next_state
             gt_fixes = env.coord_data[:, :2]

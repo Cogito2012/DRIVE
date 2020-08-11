@@ -19,7 +19,7 @@ SAC:
   tau: 0.005
   lr: 0.0003
   num_classes: 2
-  hidden_size: 256
+  hidden_size: 64
   policy: "Gaussian"
   target_update_interval: 1000
   automatic_entropy_tuning: true

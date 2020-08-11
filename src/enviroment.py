@@ -112,10 +112,11 @@ class DashCamEnv(core.Env):
         return e_x / e_x.sum(axis=0)
 
 
-    def pred_to_point(self, scale_x, scale_y):
+    def scales_to_point(self, scales):
         """Transform the predicted scaling factor ranging from -1 to 1
         into the image plane with extends=[240, 320] by considering the image padding
         """
+        scale_x, scale_y = scales[0], scales[1]
         rows_rate = self.image_size[0] / self.height  # 660 / 240
         cols_rate = self.image_size[1] / self.width   # 1584 / 320
         if rows_rate > cols_rate:
@@ -130,6 +131,26 @@ class DashCamEnv(core.Env):
             r = r + (self.height - new_rows) // 2
         point = np.array([c, r])  # (x, y)
         return point
+
+
+    def point_to_scales(self, point):
+        """Transform the point that is defined on [480, 640] plane into scales ranging from -1 to 1 on image plane
+        point: [x, y]
+        """
+        rows_rate = self.image_size[0] / self.height  # 660 / 240
+        cols_rate = self.image_size[1] / self.width   # 1584 / 320
+        if rows_rate > cols_rate:
+            new_cols = (self.image_size[1] * self.height) // self.image_size[0]
+            point[0] = point[0] - (self.width - new_cols) // 2
+            scale_x = (point[0] - 0.5 * new_cols) / (0.5 * new_cols)
+            scale_y = (0.5 * self.height - point[1]) / (0.5 * self.height)
+        else:
+            new_rows = (self.image_size[0] * self.width) // self.image_size[1]
+            point[1] = point[1] - (self.height - new_rows) // 2
+            scale_y = (0.5 * new_rows - point[1]) / (0.5 * new_rows)
+            scale_x = (point[0] - 0.5 * self.width) / (0.5 * self.width)
+        scales = np.array([scale_x, scale_y])
+        return scales
 
 
     def get_next_state(self, next_fixation, next_step):
@@ -179,12 +200,7 @@ class DashCamEnv(core.Env):
         """ action: (3)
         """
         # actions input, range from -1 to 1
-        self.next_fixation = self.pred_to_point(action[0], action[1])
-        # Note that a = tanh(u) where u=FC(input), so that u=arctanh(a)=0.5*ln((1+a)/(1-a))
-        # accident_pred = 0.5 * np.log((1 + action[2:]) / (1 - action[2:]) + 1e-6)
-        # exp(u) = sqrt((1+a) / (1-a)) so that softmax(u) = exp(u) / sum(exp(u))
-        # accident_score = np.sqrt((1 + action[2:]) / (1 - action[2:]))
-        # score_pred = accident_score[1] / np.sum(accident_score)
+        self.next_fixation = self.scales_to_point(action[:2])
 
         # self.score_pred = self.softmax(action[2])[1]
         self.score_pred = 0.5 * (action[2] + 1.0)  # map to [0, 1]
@@ -198,11 +214,13 @@ class DashCamEnv(core.Env):
             # reward (immediate)
             cur_reward = self.get_reward(self.next_fixation, self.score_pred) if isTraining else 0
             done = False
+            info.update({'gt_fixation': self.point_to_scales(self.coord_data[self.cur_step + 1, :2])})  # ground truth of the next fixation
         else:
             # The last step
             next_state = self.cur_state.copy()
             cur_reward = 0.0
             done = True
+            info.update({'gt_fixation': self.point_to_scales(self.coord_data[self.cur_step, :2])})  # ground truth of the next fixation
 
         self.cur_step += 1
         self.cur_state = next_state.copy()

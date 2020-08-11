@@ -2,6 +2,7 @@ import os
 import torch
 import torch.nn.functional as F
 from torch.optim import Adam
+from torch.nn.utils import clip_grad_norm_
 from .utils import soft_update, hard_update
 from .agents import GaussianPolicy, QNetwork, DeterministicPolicy
 
@@ -44,6 +45,7 @@ class SAC(object):
         
         # self.ce_loss = torch.nn.CrossEntropyLoss(reduction='none')
         self.nll_loss = torch.nn.NLLLoss(reduction='none')
+        self.mse_loss = torch.nn.MSELoss(reduction='none')
 
     
     def set_status(self, phase='train'):
@@ -99,29 +101,32 @@ class SAC(object):
 
         self.critic_optim.zero_grad()
         qf_loss.backward()
+        clip_grad_norm_(self.critic.parameters(), 40)
         self.critic_optim.step()
 
-        pi, _, log_pi, _ = self.policy.sample(state_batch, rnn_state_batch)
+        pi, _, log_pi, mean_action = self.policy.sample(state_batch, rnn_state_batch)
 
         qf1_pi, qf2_pi = self.critic(state_batch, pi)
         min_qf_pi = torch.min(qf1_pi, qf2_pi)
+        
+        # actor loss
+        actor_loss = ((self.alpha * log_pi) - min_qf_pi).mean() # Jπ = 𝔼st∼D,εt∼N[α * logπ(f(εt;st)|st) − Q(st,f(εt;st))]
 
-        policy_loss = ((self.alpha * log_pi) - min_qf_pi).mean() # Jπ = 𝔼st∼D,εt∼N[α * logπ(f(εt;st)|st) − Q(st,f(εt;st))]
-
-        # # compute the early anticipation loss
-        # # accident_pred = 0.5 * torch.log((1 + pi[:, 2:]) / (1 - pi[:, 2:]) + 1e-6)
-        # accident_score = torch.sqrt((1 + pi[:, 2:]) / (1 - pi[:, 2:]))
-        # score_pred = accident_score / torch.sum(accident_score, dim=1, keepdim=True)
-        score_pred = 0.5 * (pi[:, 2] + 1.0)
-
-        steps_batch, clsID_batch, toa_batch, fps_batch = labels_batch[:, 0], labels_batch[:, 1], labels_batch[:, 2], labels_batch[:, 3]
-        task_target = torch.zeros(batch_size, self.num_classes).to(self.device)
-        task_target.scatter_(1, clsID_batch.unsqueeze(1).long(), 1)  # one-hot
-        task_loss = self._exp_loss(score_pred, task_target, steps_batch / fps_batch, toa_batch)
-        policy_loss = self.beta * policy_loss + task_loss
+        # compute the early anticipation loss
+        score_pred = 0.5 * (mean_action[:, 2] + 1.0)
+        steps_batch, clsID_batch, toa_batch, fps_batch, fix_batch = labels_batch[:, 0], labels_batch[:, 1], labels_batch[:, 2], labels_batch[:, 3], labels_batch[:, 4:6]
+        cls_target = torch.zeros(batch_size, self.num_classes).to(self.device)
+        cls_target.scatter_(1, clsID_batch.unsqueeze(1).long(), 1)  # one-hot
+        cls_loss = self._exp_loss(score_pred, cls_target, steps_batch / fps_batch, toa_batch)  # expoential binary cross entropy
+        # fixation loss
+        fix_pred = mean_action[:, :2]  # fixation scales
+        fix_loss = self._fixation_loss(fix_pred, fix_batch)
+        # weighted sum 
+        policy_loss = self.beta * actor_loss + cls_loss + fix_loss
 
         self.policy_optim.zero_grad()
         policy_loss.backward()
+        clip_grad_norm_(self.policy.parameters(), 40)
         self.policy_optim.step()
 
         if self.automatic_entropy_tuning:
@@ -141,7 +146,15 @@ class SAC(object):
         if updates % self.target_update_interval == 0:
             soft_update(self.critic_target, self.critic, self.tau)
 
-        return qf1_loss.item(), qf2_loss.item(), policy_loss.item(), alpha_loss.item(), alpha_tlogs.item(), task_loss.item()
+        # gather results
+        losses = {'critic': qf_loss.item(), 
+                  'actor': actor_loss.item(), 
+                  'cls': cls_loss.item(), 
+                  'fixation': fix_loss.item(), 
+                  'policy_total': policy_loss.item(), 
+                  'alpha': alpha_loss.item()}
+        alpha_values = alpha_tlogs.item()
+        return losses, alpha_values
 
 
     def save_models(self, ckpt_dir, cfg, epoch):
@@ -165,8 +178,6 @@ class SAC(object):
         if os.path.isfile(weight_file):
             checkpoint = torch.load(weight_file)
             self.policy.load_state_dict(checkpoint['policy_model'])
-            # self.critic.load_state_dict(checkpoint['critic_model'])
-            # self.critic_target.load(checkpoint['critic_target'])
             print("=> loaded checkpoint '{}'".format(weight_file))
         else:
             raise FileNotFoundError
@@ -194,4 +205,17 @@ class SAC(object):
         # neg_loss = self.ce_loss(pred, target_cls)
         neg_loss = self.nll_loss(torch.log(pred + 1e-6), target_cls)
         loss = torch.mean(torch.add(torch.mul(pos_loss, target[:, 1]), torch.mul(neg_loss, target[:, 0])))
+        return loss
+
+    
+    def _fixation_loss(self, pred_fix, gt_fix):
+        # Mask out the fixations of accident frames
+        mask = gt_fix[:,0].gt(0.5)
+        pred_fix = pred_fix[mask]
+        gt_fix = gt_fix[mask]
+        if pred_fix.size(0) > 0 and gt_fix.size(0) > 0:
+            # MSE loss
+            loss = torch.mean(self.mse_loss(pred_fix, gt_fix))
+        else:
+            loss = torch.tensor(0.).to(self.device)
         return loss
