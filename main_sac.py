@@ -114,7 +114,7 @@ def write_logs(writer, outputs, updates):
     writer.add_scalar('loss/actor', losses['actor'], updates)
     writer.add_scalar('loss/cls', losses['cls'], updates)
     writer.add_scalar('loss/fixation', losses['fixation'], updates)
-    writer.add_scalar('loss/policy_total', fixation['policy_total'], updates)
+    writer.add_scalar('loss/policy_total', losses['policy_total'], updates)
     writer.add_scalar('temprature/alpha', alpha_values, updates)
 
 
