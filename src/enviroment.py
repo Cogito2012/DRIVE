@@ -69,7 +69,7 @@ class DashCamEnv(core.Env):
         self.next_fixation = None
 
         # observe the first frame
-        frame_data = torch.Tensor(self.video_data[self.cur_step]).unsqueeze(0).to(self.device)  # (B, C, H, W)
+        frame_data = torch.Tensor(self.video_data[self.cur_step]).unsqueeze(0).to(self.device, non_blocking=True)  # (B, C, H, W)
         if self.use_foveation:
             # set the center coordinate as initial fixation
             init_fixation = torch.Tensor([self.width / 2.0, self.height / 2.0]).to(torch.int64).to(device=self.device)
@@ -155,7 +155,7 @@ class DashCamEnv(core.Env):
 
     def get_next_state(self, next_fixation, next_step):
         
-        frame_next = torch.Tensor(self.video_data[next_step]).unsqueeze(0).to(self.device)  # (B, C, H, W)
+        frame_next = torch.Tensor(self.video_data[next_step]).unsqueeze(0).to(self.device, non_blocking=True)  # (B, C, H, W)
         if self.use_foveation:
             # foveation
             next_fixation = torch.Tensor(next_fixation).to(self.device)
