@@ -219,16 +219,16 @@ def test():
         for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(testdata_loader), total=len(testdata_loader)):  # (B, T, H, W, C)
             # set environment data
             state = env.set_data(video_data, coord_data)
-
+            rnn_state = torch.zeros((2, cfg.ENV.batch_size, cfg.REINFORCE.hidden_size)).to(cfg.device) if cfg.REINFORCE.use_lstm else None
             done = False
             pred_scores, pred_fixes = [], []
             while not done:
                 # select action
-                action, _, _ = agent.select_action(state)
+                action, _, _, rnn_state = agent.select_action(state, rnn_state)
                 # state transition
                 state, reward, done, _ = env.step(action)
                 # gather action results
-                next_fixation = env.pred_to_point(action[0], action[1])
+                next_fixation = env.scales_to_point(action[:2])
                 score = 0.5 * (action[2] + 1.0)
                 pred_fixes.append(next_fixation)
                 pred_scores.append(score)
