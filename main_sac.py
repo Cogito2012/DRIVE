@@ -282,7 +282,7 @@ def test():
             while not done:
                 # select action
                 action, rnn_state = agent.select_action(state, rnn_state, evaluate=True)
-                next_fixation = env.pred_to_point(action[0], action[1])
+                next_fixation = env.scales_to_point(action[:2])
                 pred_fixes.append(next_fixation)
                 # accident_pred = action[2:]
                 # score = np.exp(accident_pred[1]) / np.sum(np.exp(accident_pred))
