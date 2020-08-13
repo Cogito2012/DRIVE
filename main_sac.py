@@ -89,7 +89,7 @@ def setup_dataloader(cfg, isTraining=True):
     if not isTraining:
         test_data = DADALoader(cfg.data_path, 'testing', interval=1, max_frames=-1, 
                                 transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_focus=cfg.use_salmap)
-        testdata_loader = DataLoader(dataset=test_data, batch_size=1, shuffle=False, num_workers=cfg.num_workers, pin_memory=True)
+        testdata_loader = DataLoader(dataset=test_data, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
         print("# test set: %d"%(len(test_data)))
         return testdata_loader
 
