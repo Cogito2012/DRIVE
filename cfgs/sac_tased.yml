@@ -3,32 +3,32 @@ ENV:
   batch_size: 1
   image_shape: [660, 1584]
   input_shape: [480, 640]
-  frame_interval: 5
-  len_clip: 1
+  frame_interval: 1
+  len_clip: 32
   max_frames: -1
   binary_cls: true
-  num_workers: 4
-  dim_state: 128
+  num_workers: 2
+  dim_state: 1024
   dim_action: 3
   score_thresh: 0.7
   use_salmap: false  # set to False to speedup data loading
   use_foveation: true
   state_norm: false
-  saliency: 'MLNet'
-  env_model: ./models/saliency/mlnet_25.pth
+  saliency: 'TASED-Net'
+  env_model: ./models/saliency/tasednet_iter_1000.pt
 SAC:
   gamma: 0.99
-  tau: 1.0
+  tau: 0.005
   lr: 0.0003
   num_classes: 2
-  hidden_size: 64
-  policy: "Deterministic"
+  hidden_size: 512
+  policy: "Gaussian"
   target_update_interval: 1000
   automatic_entropy_tuning: true
   alpha: 0.001
   beta: 0.01
   replay_size: 1000000
-  batch_size: 512
+  batch_size: 256
   updates_per_step: 4
   logging_interval: 100
   policy_weight_decay: 0.001

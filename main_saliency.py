@@ -1,7 +1,7 @@
 import os 
 import torch
 from sklearn.utils import shuffle
-from src.saliency_models import MLNet, ModMSELoss
+from src.saliency.mlnet import MLNet, ModMSELoss
 from src.DADALoader import DADALoader
 import time, argparse
 from torch.utils.data import DataLoader

@@ -4,6 +4,7 @@ ENV:
   image_shape: [660, 1584]
   input_shape: [480, 640]
   frame_interval: 5
+  len_clip: 1
   max_frames: -1
   binary_cls: true
   num_workers: 4
@@ -13,7 +14,8 @@ ENV:
   use_salmap: false  # set to False to speedup data loading
   use_foveation: true
   state_norm: true
-  env_model: ./output/saliency/checkpoints/saliency_model_25.pth
+  saliency: 'MLNet'
+  env_model: ./models/saliency/mlnet_25.pth
 REINFORCE:
   gamma: 0.99
   lr: 0.001

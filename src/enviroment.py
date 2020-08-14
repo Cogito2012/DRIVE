@@ -1,7 +1,8 @@
 from gym import spaces, core
 import torch
 import torch.nn.functional as F
-from src.saliency_models import MLNet
+from src.saliency.mlnet import MLNet
+from src.saliency.tasednet import TASED_v2
 from src.TorchFovea import TorchFovea
 import numpy as np
 import os
@@ -10,11 +11,18 @@ import os
 class DashCamEnv(core.Env):
     def __init__(self, cfg, device=torch.device("cuda")):
         self.device = device
-        self.observe_model = MLNet(cfg.input_shape)
+        self.saliency = cfg.saliency
+        if self.saliency == 'MLNet':
+            self.observe_model = MLNet(cfg.input_shape)
+        elif self.saliency == 'TASED-Net':
+            self.observe_model = TASED_v2(cfg.input_shape)
+        else:
+            raise NotImplementedError
         self.output_shape = self.observe_model.output_shape
         self.use_foveation = cfg.use_foveation
         if self.use_foveation:
             self.foveal_model = TorchFovea(cfg.input_shape, min(cfg.input_shape)/6.0, level=5, factor=2, device=device)
+        self.len_clip = cfg.len_clip
         self.image_size = cfg.image_shape
         self.dim_state = cfg.dim_state
         self.dim_action = cfg.dim_action
@@ -28,7 +36,23 @@ class DashCamEnv(core.Env):
             # load model weight file
             assert os.path.exists(weight_file), "Checkpoint directory does not exist! %s"%(weight_file)
             ckpt = torch.load(weight_file)
-            self.observe_model.load_state_dict(ckpt['model'])
+            if self.saliency == 'MLNet':
+                self.observe_model.load_state_dict(ckpt['model'])
+            elif self.saliency == 'TASED-Net':
+                model_dict = self.observe_model.state_dict()
+                for name, param in ckpt.items():
+                    if 'module' in name:
+                        name = '.'.join(name.split('.')[1:])
+                    if name in model_dict:
+                        if param.size() == model_dict[name].size():
+                            model_dict[name].copy_(param)
+                        else:
+                            print (' size? ' + name, param.size(), model_dict[name].size())
+                    else:
+                        print (' name? ' + name)
+                self.observe_model.load_state_dict(model_dict)
+            else:
+                raise NotImplementedError
             self.observe_model.to(self.device)
             self.observe_model.eval()
         else:
@@ -41,6 +65,7 @@ class DashCamEnv(core.Env):
             coord_data: (B, T, 3), (x, y, cls)
         """ 
         assert video_data.size(0) == 1, "Only batch size == 1 is allowed!"
+        assert video_data.size(1) > self.len_clip, "Video is too short! Less than %d frames"%(self.len_clip)
         self.height, self.width = video_data.size(3), video_data.size(4)
         # the following attributes are unchanged or ground truth of environment for an entire video
         self.video_data = video_data[0].numpy()  # (T, 3, H, W)
@@ -48,9 +73,9 @@ class DashCamEnv(core.Env):
         
         accident_inds = np.where(self.coord_data[:, 2] > 0)[0]
         if len(accident_inds) > 0:
-            self.max_step = accident_inds[-1] + 1
+            self.max_step = np.minimum(accident_inds[-1] + 1, self.video_data.shape[0] - self.len_clip)
         else:
-            self.max_step = video_data.size(1)
+            self.max_step = self.video_data.shape[0] - self.len_clip
         
         cls_set = np.unique(self.coord_data[:, 2].astype(np.int32))
         if len(cls_set) > 1:
@@ -68,13 +93,12 @@ class DashCamEnv(core.Env):
         self.cur_step = 0  # step id of the environment
         self.next_fixation = None
 
-        # observe the first frame
-        frame_data = torch.Tensor(self.video_data[self.cur_step]).unsqueeze(0).to(self.device, non_blocking=True)  # (B, C, H, W)
+        frame_data = torch.Tensor(self.video_data[self.cur_step: self.cur_step+self.len_clip]).to(self.device, non_blocking=True)  # (T, C, H, W)
         if self.use_foveation:
             # set the center coordinate as initial fixation
             init_fixation = torch.Tensor([self.width / 2.0, self.height / 2.0]).to(torch.int64).to(device=self.device)
             # foveation
-            frame_data = self.foveal_model.foveate(frame_data, init_fixation)
+            frame_data = self.foveal_model.foveate(frame_data, init_fixation)  # (T, C, H, W)
 
         # observation by computing saliency
         with torch.no_grad():
@@ -83,17 +107,25 @@ class DashCamEnv(core.Env):
         return self.cur_state
 
 
-    def observe(self, frame):
+    def observe(self, data_input):
         """ 
-        frame: (B, C, H, W)
+        data_input: (T, C, H, W)
         """ 
-        # compute saliency map
-        saliency, bottom = self.observe_model(frame, return_bottom=True)
-        # here we use saliency map as observed states
-        state = saliency * bottom  # (1, 64, 30, 40)
-        max_pool = F.max_pool2d(state, kernel_size=state.size()[2:])
-        avg_pool = F.avg_pool2d(state, kernel_size=state.size()[2:])
-        state = torch.cat([max_pool, avg_pool], dim=1).squeeze_(dim=-1).squeeze_(dim=-1)  # (1, 128)
+        if self.saliency == 'MLNet':
+            # compute saliency map
+            saliency, bottom = self.observe_model(data_input, return_bottom=True)
+            # here we use saliency map as observed states
+            state = saliency * bottom  # (1, 64, 30, 40)
+            max_pool = F.max_pool2d(state, kernel_size=state.size()[2:])
+            avg_pool = F.avg_pool2d(state, kernel_size=state.size()[2:])
+            state = torch.cat([max_pool, avg_pool], dim=1).squeeze_(dim=-1).squeeze_(dim=-1)  # (1, 128)    
+        elif self.saliency == 'TASED-Net':
+            data_input = data_input.permute(1, 0, 2, 3).contiguous().unsqueeze(0)  # (B=1, C=3, T=8, H=480, W=640)
+            # compute saliency map
+            saliency, bottom = self.observe_model(data_input, return_bottom=True)
+            state = F.avg_pool3d(bottom, kernel_size=bottom.size()[2:]).squeeze_(dim=-1).squeeze_(dim=-1).squeeze_(dim=-1)  # (1, 1024)
+        else:
+            raise NotImplementedError
         if self.state_norm:
             state = F.normalize(state, p=2, dim=1)
         return state
@@ -155,7 +187,7 @@ class DashCamEnv(core.Env):
 
     def get_next_state(self, next_fixation, next_step):
         
-        frame_next = torch.Tensor(self.video_data[next_step]).unsqueeze(0).to(self.device, non_blocking=True)  # (B, C, H, W)
+        frame_next = torch.Tensor(self.video_data[next_step: next_step+self.len_clip]).to(self.device, non_blocking=True)  # (T, C, H, W)
         if self.use_foveation:
             # foveation
             next_fixation = torch.Tensor(next_fixation).to(self.device)
