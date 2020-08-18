@@ -80,7 +80,7 @@ class DashCamEnv(core.Env):
         
         cls_set = np.unique(self.coord_data[:, 2].astype(np.int32))
         if len(cls_set) > 1:
-            self.clsID = cls_set[1] # 1 or 2
+            self.clsID = cls_set[1]-1 # 0 or 1
             self.begin_accident = np.maximum(np.where(self.coord_data[:, 2] > 0)[0][0] / float(self.fps), 1.0)
         else:
             self.clsID = 0
@@ -123,7 +123,7 @@ class DashCamEnv(core.Env):
         elif self.saliency == 'TASED-Net':
             data_input = data_input.permute(1, 0, 2, 3).contiguous().unsqueeze(0)  # (B=1, C=3, T=8, H=480, W=640)
             # compute saliency map
-            saliency, bottom = self.observe_model(data_input, return_bottom=True)
+            bottom = self.observe_model(data_input, return_bottom=True)
             max_pool = F.max_pool3d(bottom, kernel_size=bottom.size()[2:])
             avg_pool = F.avg_pool3d(bottom, kernel_size=bottom.size()[2:])
             state = torch.cat([max_pool, avg_pool], dim=1).squeeze_(dim=-1).squeeze_(dim=-1).squeeze_(dim=-1)  # (1, 384)
@@ -219,12 +219,12 @@ class DashCamEnv(core.Env):
         # compute the accident score
         if score > self.score_thresh:
             tta_weight = (np.exp(np.maximum(self.begin_accident - self.cur_step*self.step_size / self.fps, 0)) - 1.0) / (np.exp(self.begin_accident) - 1.0)
-            if self.clsID > 1:
+            if self.clsID > 0:
                 tta_reward = 1.0 * tta_weight  # true positive
             else:
                 tta_reward = 0.0  # false positive
         else:
-            if self.clsID > 1:
+            if self.clsID > 0:
                 tta_reward = 0.0  # false negative
             else:
                 tta_reward = 1.0   # true negative

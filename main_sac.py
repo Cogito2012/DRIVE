@@ -155,7 +155,7 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
             mask = 1 if episode_steps == env.max_step else float(not done)
             cur_time = (env.cur_step-1) * env.step_size / env.fps
             gt_fix_next = info['gt_fixation']
-            labels = np.array([cur_time, env.clsID-1, env.begin_accident, gt_fix_next[0], gt_fix_next[1]], dtype=np.float32)
+            labels = np.array([cur_time, env.clsID, env.begin_accident, gt_fix_next[0], gt_fix_next[1]], dtype=np.float32)
             memory.push(state.flatten(), action.flatten(), reward, next_state.flatten(), rnn_state.reshape(-1, cfg.SAC.hidden_size), labels, mask) # Append transition to memory
 
             # shift to next state

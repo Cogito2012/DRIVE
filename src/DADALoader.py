@@ -66,12 +66,9 @@ class DADALoader(Dataset):
 
     def select_frames(self, frame_ids, num=-1):
         if num < 0:
-            num = len(frame_ids)
-        if num <= len(frame_ids):
-            inds = np.random.choice(len(frame_ids), size=num, replace=False)
+            inds = np.arange(len(frame_ids))  # select all T frames
         else:
-            inds = np.random.choice(len(frame_ids), size=num, replace=True)
-        inds = np.sort(inds)
+            inds = np.arange(min(num, len(frame_ids)))  # select top-N or all (N >= T)
         sel_frames = [frame_ids[i] for i in inds]
         return sel_frames, inds
 
@@ -121,7 +118,7 @@ class DADALoader(Dataset):
             fid += 1
         if max_frames > 0:
             frame_ids, inds = self.select_frames(frame_ids, num=max_frames)
-            video_data = video_data[inds]
+            video_data = [video_data[i] for i in inds]
         video_data = np.array(video_data, dtype=np.float32)  # 4D tensor, (N, 660, 1584, 3)
         return video_data, frame_ids
 

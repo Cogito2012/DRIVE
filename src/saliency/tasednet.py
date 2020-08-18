@@ -102,12 +102,13 @@ class TASED_v2(nn.Module):
         z = self.convtsp3(z)                           # (1, 192, 4, 60, 80)
         if return_bottom:
             bottom = z.clone()
+            return bottom
         z = self.unpool3(z, i2, y3.size())             # (1, 192, 4, 120, 160)
         z = self.convtsp4(z)                           # (1, 1, 1, 480, 640)
         z = z.view(z.size(0), z.size(3), z.size(4))    # (1, 480, 640)
 
-        if return_bottom:
-            return z, bottom
+        # if return_bottom:
+        #     return z, bottom
         return z
 
 class BasicConv3d(nn.Module):
