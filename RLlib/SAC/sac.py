@@ -13,7 +13,8 @@ class SAC(object):
         self.gamma = cfg.gamma
         self.tau = cfg.tau
         self.alpha = cfg.alpha
-        self.beta = cfg.beta
+        self.beta_actor = cfg.beta_actor
+        self.beta_fix = cfg.beta_fix
 
         self.policy_type = cfg.policy
         self.target_update_interval = cfg.target_update_interval
@@ -113,16 +114,16 @@ class SAC(object):
         actor_loss = ((self.alpha * log_pi) - min_qf_pi).mean() # Jπ = 𝔼st∼D,εt∼N[α * logπ(f(εt;st)|st) − Q(st,f(εt;st))]
 
         # compute the early anticipation loss
-        score_pred = 0.5 * (mean_action[:, 2] + 1.0)
-        steps_batch, clsID_batch, toa_batch, fps_batch, fix_batch = labels_batch[:, 0], labels_batch[:, 1], labels_batch[:, 2], labels_batch[:, 3], labels_batch[:, 4:6]
+        score_pred = 0.5 * (pi[:, 2] + 1.0)
+        curtime_batch, clsID_batch, toa_batch, fix_batch = labels_batch[:, 0], labels_batch[:, 1], labels_batch[:, 2], labels_batch[:, 3:5]
         cls_target = torch.zeros(batch_size, self.num_classes).to(self.device)
         cls_target.scatter_(1, clsID_batch.unsqueeze(1).long(), 1)  # one-hot
-        cls_loss = self._exp_loss(score_pred, cls_target, steps_batch / fps_batch, toa_batch)  # expoential binary cross entropy
+        cls_loss = self._exp_loss(score_pred, cls_target, curtime_batch, toa_batch)  # expoential binary cross entropy
         # fixation loss
-        fix_pred = mean_action[:, :2]  # fixation scales
+        fix_pred = pi[:, :2]  # fixation scales
         fix_loss = self._fixation_loss(fix_pred, fix_batch)
         # weighted sum 
-        policy_loss = self.beta * actor_loss + cls_loss + fix_loss
+        policy_loss = self.beta_actor * actor_loss + cls_loss + self.beta_fix * fix_loss
 
         self.policy_optim.zero_grad()
         policy_loss.backward()

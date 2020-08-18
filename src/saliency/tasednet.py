@@ -80,30 +80,34 @@ class TASED_v2(nn.Module):
         )
 
     def forward(self, x, return_bottom=False):
-        y3 = self.base1(x)
-        y = self.maxp2(y3)
-        y3 = self.maxm2(y3)
-        _, i2 = self.maxt2(y3)
-        y2 = self.base2(y)
-        y = self.maxp3(y2)
-        y2 = self.maxm3(y2)
-        _, i1 = self.maxt3(y2)
-        y1 = self.base3(y)
-        y = self.maxt4(y1)
-        y, i0 = self.maxp4(y)
-        y0 = self.base4(y)
+        """x: (1, 3, 32, 480, 640)
+        """
+        y3 = self.base1(x)      # (1, 192, 16, 120, 160)
+        y = self.maxp2(y3)      # (1, 192, 16, 60, 80)
+        y3 = self.maxm2(y3)     # (1, 192, 4, 120, 160)
+        _, i2 = self.maxt2(y3)  # (1, 192, 4, 60, 80)
+        y2 = self.base2(y)      # (1, 480, 16, 60, 80)
+        y = self.maxp3(y2)      # (1, 480, 8, 30, 40)
+        y2 = self.maxm3(y2)     # (1, 480, 4, 60, 80)
+        _, i1 = self.maxt3(y2)  # (1, 480, 4, 30, 40)
+        y1 = self.base3(y)      # (1, 832, 8, 30, 40)
+        y = self.maxt4(y1)      # (1, 832, 4, 30, 40)
+        y, i0 = self.maxp4(y)   # (1, 832, 4, 15, 20)
+        y0 = self.base4(y)      # (1, 1024, 4, 15, 20)
 
-        z = self.convtsp1(y0)
-        z = self.unpool1(z, i0)
-        z = self.convtsp2(z)
-        z = self.unpool2(z, i1, y2.size())
-        z = self.convtsp3(z)
-        z = self.unpool3(z, i2, y3.size())
-        z = self.convtsp4(z)
-        z = z.view(z.size(0), z.size(3), z.size(4))
+        z = self.convtsp1(y0)                          # (1, 832, 4, 15, 20)
+        z = self.unpool1(z, i0)                        # (1, 832, 4, 30, 40)
+        z = self.convtsp2(z)                           # (1, 480, 4, 30, 40)
+        z = self.unpool2(z, i1, y2.size())             # (1, 480, 4, 60, 80)
+        z = self.convtsp3(z)                           # (1, 192, 4, 60, 80)
+        if return_bottom:
+            bottom = z.clone()
+        z = self.unpool3(z, i2, y3.size())             # (1, 192, 4, 120, 160)
+        z = self.convtsp4(z)                           # (1, 1, 1, 480, 640)
+        z = z.view(z.size(0), z.size(3), z.size(4))    # (1, 480, 640)
 
         if return_bottom:
-            return z, y0
+            return z, bottom
         return z
 
 class BasicConv3d(nn.Module):

@@ -4,6 +4,7 @@ ENV:
   image_shape: [660, 1584]
   input_shape: [480, 640]
   frame_interval: 5
+  step_size: 1
   len_clip: 1
   max_frames: -1
   binary_cls: true
@@ -26,7 +27,8 @@ SAC:
   target_update_interval: 1000
   automatic_entropy_tuning: true
   alpha: 0.001
-  beta: 0.01
+  beta_actor: 0.01
+  beta_fix: 1.0
   replay_size: 1000000
   batch_size: 512
   updates_per_step: 4

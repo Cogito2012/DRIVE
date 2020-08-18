@@ -153,8 +153,9 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
 
             # push the current step into memory
             mask = 1 if episode_steps == env.max_step else float(not done)
+            cur_time = (env.cur_step-1) * env.step_size / env.fps
             gt_fix_next = info['gt_fixation']
-            labels = np.array([env.cur_step-1, env.clsID-1, env.begin_accident, env.fps, gt_fix_next[0], gt_fix_next[1]], dtype=np.float32)
+            labels = np.array([cur_time, env.clsID-1, env.begin_accident, gt_fix_next[0], gt_fix_next[1]], dtype=np.float32)
             memory.push(state.flatten(), action.flatten(), reward, next_state.flatten(), rnn_state.reshape(-1, cfg.SAC.hidden_size), labels, mask) # Append transition to memory
 
             # shift to next state
@@ -280,12 +281,15 @@ def test():
             # init vars before each episode
             rnn_state = np.zeros((2, cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=np.float32)
             done = False
-            pred_scores, pred_fixes = [], []
+            pred_scores, pred_fixes, gt_fixes = [], [], []
             while not done:
                 # select action
                 action, rnn_state = agent.select_action(state, rnn_state, evaluate=True)
                 next_fixation = env.scales_to_point(action[:2])
                 pred_fixes.append(next_fixation)
+                # gather ground truth of next fixation
+                gt_fixes.append(env.coord_data[(env.cur_step + 1) * env.step_size, :2])
+
                 # accident_pred = action[2:]
                 # score = np.exp(accident_pred[1]) / np.sum(np.exp(accident_pred))
                 # pred_scores.append(score)
@@ -296,7 +300,8 @@ def test():
                 next_state, reward, done, _ = env.step(action)
                 # transition
                 state = next_state
-            gt_fixes = env.coord_data[:, :2]
+            # gt_fixes = env.coord_data[:, :2]
+            gt_fixes = np.vstack(gt_fixes)
             # save results
             save_dict['score_preds'].append(np.array(pred_scores, dtype=np.float32))
             save_dict['fix_preds'].append(np.array(pred_fixes, dtype=np.float32))

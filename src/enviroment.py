@@ -27,6 +27,7 @@ class DashCamEnv(core.Env):
         self.dim_state = cfg.dim_state
         self.dim_action = cfg.dim_action
         self.fps = 30 / cfg.frame_interval
+        self.step_size = cfg.step_size
         self.score_thresh = cfg.score_thresh
         self.state_norm = cfg.state_norm
 
@@ -73,9 +74,9 @@ class DashCamEnv(core.Env):
         
         accident_inds = np.where(self.coord_data[:, 2] > 0)[0]
         if len(accident_inds) > 0:
-            self.max_step = np.minimum(accident_inds[-1] + 1, self.video_data.shape[0] - self.len_clip)
+            self.max_step = np.minimum(accident_inds[-1] + 1, self.video_data.shape[0] - self.len_clip) // self.step_size
         else:
-            self.max_step = self.video_data.shape[0] - self.len_clip
+            self.max_step = (self.video_data.shape[0] - self.len_clip) // self.step_size
         
         cls_set = np.unique(self.coord_data[:, 2].astype(np.int32))
         if len(cls_set) > 1:
@@ -93,7 +94,7 @@ class DashCamEnv(core.Env):
         self.cur_step = 0  # step id of the environment
         self.next_fixation = None
 
-        frame_data = torch.Tensor(self.video_data[self.cur_step: self.cur_step+self.len_clip]).to(self.device, non_blocking=True)  # (T, C, H, W)
+        frame_data = torch.Tensor(self.video_data[self.cur_step*self.step_size: self.cur_step*self.step_size+self.len_clip]).to(self.device, non_blocking=True)  # (T, C, H, W)
         if self.use_foveation:
             # set the center coordinate as initial fixation
             init_fixation = torch.Tensor([self.width / 2.0, self.height / 2.0]).to(torch.int64).to(device=self.device)
@@ -123,7 +124,9 @@ class DashCamEnv(core.Env):
             data_input = data_input.permute(1, 0, 2, 3).contiguous().unsqueeze(0)  # (B=1, C=3, T=8, H=480, W=640)
             # compute saliency map
             saliency, bottom = self.observe_model(data_input, return_bottom=True)
-            state = F.avg_pool3d(bottom, kernel_size=bottom.size()[2:]).squeeze_(dim=-1).squeeze_(dim=-1).squeeze_(dim=-1)  # (1, 1024)
+            max_pool = F.max_pool3d(bottom, kernel_size=bottom.size()[2:])
+            avg_pool = F.avg_pool3d(bottom, kernel_size=bottom.size()[2:])
+            state = torch.cat([max_pool, avg_pool], dim=1).squeeze_(dim=-1).squeeze_(dim=-1).squeeze_(dim=-1)  # (1, 384)
         else:
             raise NotImplementedError
         if self.state_norm:
@@ -188,7 +191,7 @@ class DashCamEnv(core.Env):
 
     def get_next_state(self, next_fixation, next_step):
         
-        frame_next = torch.Tensor(self.video_data[next_step: next_step+self.len_clip]).to(self.device, non_blocking=True)  # (T, C, H, W)
+        frame_next = torch.Tensor(self.video_data[next_step * self.step_size: next_step * self.step_size + self.len_clip]).to(self.device, non_blocking=True)  # (T, C, H, W)
         if self.use_foveation:
             # foveation
             next_fixation = torch.Tensor(next_fixation).to(self.device)
@@ -204,7 +207,7 @@ class DashCamEnv(core.Env):
             score: (1,): accident score
         """
         # attentiveness reward (mse of fixations)
-        fixation_gt = self.coord_data[self.cur_step + 1, :2]  # (2,)
+        fixation_gt = self.coord_data[(self.cur_step + 1)*self.step_size, :2]  # (2,)
         if fixation_gt[0] > 0 and fixation_gt[1] > 0:
             # R = exp{-|P' - P|}
             # To ensure a bounded reward, the fixation points are normalized to [0, 1] with image size
@@ -215,7 +218,7 @@ class DashCamEnv(core.Env):
 
         # compute the accident score
         if score > self.score_thresh:
-            tta_weight = (np.exp(np.maximum(self.begin_accident - self.cur_step / self.fps, 0)) - 1.0) / (np.exp(self.begin_accident) - 1.0)
+            tta_weight = (np.exp(np.maximum(self.begin_accident - self.cur_step*self.step_size / self.fps, 0)) - 1.0) / (np.exp(self.begin_accident) - 1.0)
             if self.clsID > 1:
                 tta_reward = 1.0 * tta_weight  # true positive
             else:
@@ -247,13 +250,13 @@ class DashCamEnv(core.Env):
             # reward (immediate)
             cur_reward = self.get_reward(self.next_fixation, self.score_pred) if isTraining else 0
             done = False
-            info.update({'gt_fixation': self.point_to_scales(self.coord_data[self.cur_step + 1, :2])})  # ground truth of the next fixation
+            info.update({'gt_fixation': self.point_to_scales(self.coord_data[(self.cur_step + 1)*self.step_size, :2])})  # ground truth of the next fixation
         else:
             # The last step
             next_state = self.cur_state.copy()
             cur_reward = 0.0
             done = True
-            info.update({'gt_fixation': self.point_to_scales(self.coord_data[self.cur_step, :2])})  # ground truth of the next fixation
+            info.update({'gt_fixation': self.point_to_scales(self.coord_data[self.cur_step*self.step_size, :2])})  # ground truth of the next fixation
 
         self.cur_step += 1
         self.cur_state = next_state.copy()
