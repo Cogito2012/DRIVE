@@ -6,9 +6,9 @@ ENV:
   frame_interval: 5
   step_size: 1
   len_clip: 1
-  max_frames: -1
+  max_frames: 120    # 600/5, 20 seconds
   binary_cls: true
-  num_workers: 4
+  num_workers: 0
   dim_state: 128
   dim_action: 3
   score_thresh: 0.7
@@ -30,7 +30,7 @@ SAC:
   beta_actor: 0.01
   beta_fix: 1.0
   replay_size: 1000000
-  batch_size: 512
+  batch_size: 256
   updates_per_step: 4
   logging_interval: 100
   policy_weight_decay: 0.001
