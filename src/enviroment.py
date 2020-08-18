@@ -169,6 +169,7 @@ class DashCamEnv(core.Env):
         """Transform the point that is defined on [480, 640] plane into scales ranging from -1 to 1 on image plane
         point: [x, y]
         """
+        point = point.copy()
         rows_rate = self.image_size[0] / self.height  # 660 / 240
         cols_rate = self.image_size[1] / self.width   # 1584 / 320
         if rows_rate > cols_rate:

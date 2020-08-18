@@ -87,7 +87,7 @@ def setup_dataloader(cfg, isTraining=True):
 
     # testing dataset
     if not isTraining:
-        test_data = DADALoader(cfg.data_path, 'testing', interval=1, max_frames=-1, 
+        test_data = DADALoader(cfg.data_path, 'testing', interval=cfg.frame_interval, max_frames=-1, 
                                 transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_focus=cfg.use_salmap)
         testdata_loader = DataLoader(dataset=test_data, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
         print("# test set: %d"%(len(test_data)))
@@ -271,7 +271,9 @@ def test():
         # start to test 
         agent.set_status('eval')
         save_dict = {'score_preds': [], 'fix_preds': [], 'gt_labels': [], 'gt_fixes': [], 'toas': [], 'vids': []}
-        for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(testdata_loader), total=len(testdata_loader)):  # (B, T, H, W, C)
+        for i, (video_data, _, coord_data, data_info) in enumerate(testdata_loader):  # (B, T, H, W, C)
+            print("Testing video %d/%d, file: %d/%d.avi, frame #: %d (fps=%.2f)."
+                %(i+1, len(testdata_loader), data_info[0, 0], data_info[0, 1], video_data.size(1), 30/cfg.ENV.frame_interval))
             # set environment data
             state = env.set_data(video_data, coord_data)
 
