@@ -140,7 +140,7 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
             if len(memory) > cfg.SAC.batch_size:
                 # Number of updates per step in environment
                 for _ in range(cfg.SAC.updates_per_step):
-                    outputs = agent.update_parameters(memory, cfg.SAC.batch_size, updates)
+                    outputs = agent.update_parameters(memory, updates)
                     if updates % cfg.SAC.logging_interval == 0:
                         # write log
                         write_logs(writer, outputs, updates)

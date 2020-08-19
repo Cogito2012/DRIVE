@@ -21,6 +21,7 @@ class SAC(object):
         self.automatic_entropy_tuning = cfg.automatic_entropy_tuning
         self.num_classes = cfg.num_classes
         self.device = device
+        self.batch_size = cfg.batch_size
 
         self.critic = QNetwork(num_inputs, dim_action, cfg.hidden_size).to(device=self.device)
         self.critic_optim = Adam(self.critic.parameters(), lr=cfg.lr)
@@ -77,9 +78,9 @@ class SAC(object):
         return action.detach().cpu().numpy()[0], rnn_state
 
 
-    def update_parameters(self, memory, batch_size, updates):
+    def sample_from_buffer(self, memory):
         # Sample a batch from memory
-        state_batch, action_batch, reward_batch, next_state_batch, rnn_state_batch, labels_batch, mask_batch = memory.sample(batch_size=batch_size)
+        state_batch, action_batch, reward_batch, next_state_batch, rnn_state_batch, labels_batch, mask_batch = memory.sample(batch_size=self.batch_size)
         if rnn_state_batch[:, 0] is not None:
             rnn_state_batch = (torch.from_numpy(rnn_state_batch[:, 0]).to(self.device), torch.from_numpy(rnn_state_batch[:, 1]).to(self.device))
 
@@ -90,6 +91,10 @@ class SAC(object):
         labels_batch = torch.FloatTensor(labels_batch).to(self.device)
         mask_batch = torch.FloatTensor(mask_batch).to(self.device).unsqueeze(1)
 
+        return state_batch, action_batch, reward_batch, next_state_batch, mask_batch, rnn_state_batch, labels_batch
+
+
+    def update_critic(self, state_batch, action_batch, reward_batch, next_state_batch, mask_batch, rnn_state_batch):
         with torch.no_grad():
             next_state_action, _, next_state_log_pi, _ = self.policy.sample(next_state_batch, rnn_state_batch)
             qf1_next_target, qf2_next_target = self.critic_target(next_state_batch, next_state_action)
@@ -104,7 +109,10 @@ class SAC(object):
         qf_loss.backward()
         clip_grad_norm_(self.critic.parameters(), 40)
         self.critic_optim.step()
+        return qf_loss
 
+
+    def update_actor(self, state_batch, rnn_state_batch, labels_batch):
         pi, _, log_pi, mean_action = self.policy.sample(state_batch, rnn_state_batch)
 
         qf1_pi, qf2_pi = self.critic(state_batch, pi)
@@ -116,7 +124,7 @@ class SAC(object):
         # compute the early anticipation loss
         score_pred = 0.5 * (pi[:, 2] + 1.0)
         curtime_batch, clsID_batch, toa_batch, fix_batch = labels_batch[:, 0], labels_batch[:, 1], labels_batch[:, 2], labels_batch[:, 3:5]
-        cls_target = torch.zeros(batch_size, self.num_classes).to(self.device)
+        cls_target = torch.zeros(self.batch_size, self.num_classes).to(self.device)
         cls_target.scatter_(1, clsID_batch.unsqueeze(1).long(), 1)  # one-hot
         cls_loss = self._exp_loss(score_pred, cls_target, curtime_batch, toa_batch)  # expoential binary cross entropy
         # fixation loss
@@ -130,6 +138,10 @@ class SAC(object):
         clip_grad_norm_(self.policy.parameters(), 40)
         self.policy_optim.step()
 
+        return log_pi, policy_loss, actor_loss, cls_loss, fix_loss
+
+
+    def update_entropy(self, log_pi):
         if self.automatic_entropy_tuning:
             alpha_loss = -(self.log_alpha * (log_pi + self.target_entropy).detach()).mean()
 
@@ -142,8 +154,25 @@ class SAC(object):
         else:
             alpha_loss = torch.tensor(0.).to(self.device)
             alpha_tlogs = torch.tensor(self.alpha) # For TensorboardX logs
+        return alpha_loss, alpha_tlogs
 
 
+    def update_parameters(self, memory, updates):
+        
+        # sampling from replay buffer memory
+        state_batch, action_batch, reward_batch, next_state_batch, mask_batch, rnn_state_batch, labels_batch = \
+            self.sample_from_buffer(memory)
+
+        # update critic networks
+        qf_loss = self.update_critic(state_batch, action_batch, reward_batch, next_state_batch, mask_batch, rnn_state_batch)
+        
+        # update actor and alpha
+        log_pi, policy_loss, actor_loss, cls_loss, fix_loss = self.update_actor(state_batch, rnn_state_batch, labels_batch)
+
+        # update entropy term
+        alpha_loss, alpha_tlogs = self.update_entropy(log_pi)
+
+        # update critic target
         if updates % self.target_update_interval == 0:
             soft_update(self.critic_target, self.critic, self.tau)
 
