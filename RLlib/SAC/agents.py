@@ -37,24 +37,71 @@ class ValueNetwork(nn.Module):
         return x
 
 
+class StateEncoder(nn.Module):
+    def __init__(self, dim_state, dim_latent):
+        super(StateEncoder, self).__init__()
+        self.encoder = nn.Sequential(nn.Linear(dim_state, dim_latent), nn.ReLU(),
+                                         nn.Linear(dim_latent, dim_latent), nn.ReLU(),
+                                         nn.Linear(dim_latent, dim_latent))
+        self.ln = nn.LayerNorm(dim_latent)
+        self.apply(weights_init_)
+                                         
+    def forward(self, state, detach=False):
+        h = self.encoder(state)
+        if detach:
+            h = h.detach()
+        h_norm = self.ln(h)
+        out = torch.tanh(h_norm)
+        return out
+    
+    def copy_conv_weights_from(self, source):
+        # share the parameters
+        for i, layer in enumerate(source.encoder):
+            if isinstance(layer, nn.Linear):
+                self.encoder[i].weight = layer.weight
+                self.encoder[i].bias = layer.bias
+
+
+class StateDecoder(nn.Module):
+    def __init__(self, dim_latent, dim_state):
+        super(StateDecoder, self).__init__()
+        self.decoder = nn.Sequential(nn.Linear(dim_latent, dim_latent), nn.ReLU(),
+                                     nn.Linear(dim_latent, dim_latent), nn.ReLU(),
+                                     nn.Linear(dim_latent, dim_state))
+        self.apply(weights_init_)
+
+    def forward(self, h):
+        return self.decoder(h)
+        
+
 class QNetwork(nn.Module):
-    def __init__(self, num_inputs, num_actions, hidden_dim):
+    def __init__(self, num_inputs, num_actions, hidden_dim, dim_latent=None, arch_type='mlp'):
         super(QNetwork, self).__init__()
+        self.arch_type = arch_type
+        self.dim_latent = dim_latent
+        if arch_type == 'rae':
+            self.state_encoder = StateEncoder(num_inputs, dim_latent)
+            self.num_inputs = dim_latent
+        else:
+            self.num_inputs = num_inputs
 
         # Q1 architecture
-        self.linear1 = nn.Linear(num_inputs + num_actions, hidden_dim)
+        self.linear1 = nn.Linear(self.num_inputs + num_actions, hidden_dim)
         self.linear2 = nn.Linear(hidden_dim, hidden_dim)
         self.linear3 = nn.Linear(hidden_dim, 1)
 
         # Q2 architecture
-        self.linear4 = nn.Linear(num_inputs + num_actions, hidden_dim)
+        self.linear4 = nn.Linear(self.num_inputs + num_actions, hidden_dim)
         self.linear5 = nn.Linear(hidden_dim, hidden_dim)
         self.linear6 = nn.Linear(hidden_dim, 1)
 
         self.apply(weights_init_)
 
-    def forward(self, state, action):
-        xu = torch.cat([state, action], 1)
+    def forward(self, state, action, detach=False):
+        if self.arch_type == 'rae':
+            xu = torch.cat([self.state_encoder(state, detach=detach), action], 1)
+        else:
+            xu = torch.cat([state, action], 1)
         
         x1 = F.relu(self.linear1(xu))
         x1 = F.relu(self.linear2(x1))
@@ -68,10 +115,17 @@ class QNetwork(nn.Module):
 
 
 class GaussianPolicy(nn.Module):
-    def __init__(self, num_inputs, num_actions, hidden_dim, action_space=None):
+    def __init__(self, num_inputs, num_actions, hidden_dim, action_space=None, dim_latent=None, arch_type='mlp'):
         super(GaussianPolicy, self).__init__()
+        self.arch_type = arch_type
+        self.dim_latent = dim_latent
+        if arch_type == 'rae':
+            self.state_encoder = StateEncoder(num_inputs, dim_latent)
+            self.num_inputs = dim_latent
+        else:
+            self.num_inputs = num_inputs
         
-        self.linear1 = nn.Linear(num_inputs, hidden_dim)
+        self.linear1 = nn.Linear(self.num_inputs, hidden_dim)
         self.linear2 = nn.Linear(hidden_dim, hidden_dim)
         self.lstm_cell = nn.LSTMCell(hidden_dim, hidden_dim)
 
@@ -90,8 +144,13 @@ class GaussianPolicy(nn.Module):
             self.action_bias = torch.FloatTensor(
                 (action_space.high + action_space.low) / 2.)
 
-    def forward(self, state, rnn_state=None):
-        x = F.relu(self.linear1(state))
+
+    def forward(self, state, rnn_state=None, detach=False):
+        if self.arch_type == 'rae':
+            x = self.state_encoder(state, detach=detach)
+        else:
+            x = state.clone()
+        x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
         rnn_state_new = None
         if rnn_state is not None:
@@ -102,8 +161,9 @@ class GaussianPolicy(nn.Module):
         log_std = torch.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
         return mean, log_std, rnn_state_new
 
-    def sample(self, state, rnn_state=None):
-        mean, log_std, rnn_state = self.forward(state, rnn_state)
+
+    def sample(self, state, rnn_state=None, detach=False):
+        mean, log_std, rnn_state = self.forward(state, rnn_state, detach=detach)
         std = log_std.exp()
         normal = Normal(mean, std)
         x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1))
@@ -123,9 +183,17 @@ class GaussianPolicy(nn.Module):
 
 
 class DeterministicPolicy(nn.Module):
-    def __init__(self, num_inputs, num_actions, hidden_dim, action_space=None):
+    def __init__(self, num_inputs, num_actions, hidden_dim, action_space=None, dim_latent=None, arch_type='mlp'):
         super(DeterministicPolicy, self).__init__()
-        self.linear1 = nn.Linear(num_inputs, hidden_dim)
+        self.arch_type = arch_type
+        self.dim_latent = dim_latent
+        if arch_type == 'rae':
+            self.state_encoder = StateEncoder(num_inputs, dim_latent)
+            self.num_inputs = dim_latent
+        else:
+            self.num_inputs = num_inputs
+        
+        self.linear1 = nn.Linear(self.num_inputs, hidden_dim)
         self.linear2 = nn.Linear(hidden_dim, hidden_dim)
         self.lstm_cell = nn.LSTMCell(hidden_dim, hidden_dim)
 
@@ -144,8 +212,12 @@ class DeterministicPolicy(nn.Module):
             self.action_bias = torch.FloatTensor(
                 (action_space.high + action_space.low) / 2.)
 
-    def forward(self, state, rnn_state=None):
-        x = F.relu(self.linear1(state))
+    def forward(self, state, rnn_state=None, detach=False):
+        if self.arch_type == 'rae':
+            x = self.state_encoder(state, detach=detach)
+        else:
+            x = state.clone()
+        x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
         rnn_state_new = None
         if rnn_state is not None:
@@ -154,8 +226,8 @@ class DeterministicPolicy(nn.Module):
         mean = torch.tanh(self.mean(x)) * self.action_scale + self.action_bias
         return mean, rnn_state_new
 
-    def sample(self, state, rnn_state=None):
-        mean, rnn_state = self.forward(state, rnn_state)
+    def sample(self, state, rnn_state=None, detach=False):
+        mean, rnn_state = self.forward(state, rnn_state, detach=detach)
         noise = self.noise.normal_(0., std=0.1)
         noise = noise.clamp(-0.25, 0.25)
         action = mean + noise

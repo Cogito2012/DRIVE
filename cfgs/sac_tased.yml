@@ -33,4 +33,7 @@ SAC:
   batch_size: 256
   updates_per_step: 4
   logging_interval: 100
-  policy_weight_decay: 0.001
+  weight_decay: 0.00001
+  arch_type: "mlp"  # mlp or rae
+  dim_latent: 64    # only useful when rae
+  latent_lambda: 0.0001

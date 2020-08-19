@@ -110,12 +110,8 @@ def setup_dataloader(cfg, isTraining=True):
 def write_logs(writer, outputs, updates):
     """Write the logs to tensorboard"""
     losses, alpha_values = outputs
-    writer.add_scalar('loss/critic', losses['critic'], updates)
-    writer.add_scalar('loss/actor', losses['actor'], updates)
-    writer.add_scalar('loss/cls', losses['cls'], updates)
-    writer.add_scalar('loss/fixation', losses['fixation'], updates)
-    writer.add_scalar('loss/policy_total', losses['policy_total'], updates)
-    writer.add_scalar('loss/alpha', losses['alpha'], updates)
+    for (k, v) in losses.items():
+        writer.add_scalar('loss/%s'%(k), v, updates)
     writer.add_scalar('temprature/alpha', alpha_values, updates)
 
 

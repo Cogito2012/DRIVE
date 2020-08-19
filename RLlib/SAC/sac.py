@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.optim import Adam
 from torch.nn.utils import clip_grad_norm_
 from .utils import soft_update, hard_update
-from .agents import GaussianPolicy, QNetwork, DeterministicPolicy
+from .agents import GaussianPolicy, QNetwork, DeterministicPolicy, StateDecoder
 
 
 class SAC(object):
@@ -16,6 +16,7 @@ class SAC(object):
         self.beta_actor = cfg.beta_actor
         self.beta_fix = cfg.beta_fix
 
+        self.arch_type = cfg.arch_type
         self.policy_type = cfg.policy
         self.target_update_interval = cfg.target_update_interval
         self.automatic_entropy_tuning = cfg.automatic_entropy_tuning
@@ -23,44 +24,59 @@ class SAC(object):
         self.device = device
         self.batch_size = cfg.batch_size
 
-        self.critic = QNetwork(num_inputs, dim_action, cfg.hidden_size).to(device=self.device)
-        self.critic_optim = Adam(self.critic.parameters(), lr=cfg.lr)
-
-        self.critic_target = QNetwork(num_inputs, dim_action, cfg.hidden_size).to(self.device)
+        # create actor and critics
+        self.policy, self.critic, self.critic_target = self.create_actor_critics(num_inputs, dim_action, cfg)
         hard_update(self.critic_target, self.critic)
 
-        if self.policy_type == "Gaussian":
+        # optimizers
+        self.critic_optim = Adam(self.critic.parameters(), lr=cfg.lr)
+        self.policy_optim = Adam(self.policy.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+
+        if cfg.arch_type == 'rae':
+            # the encoder is shared between actor and critic, weights need to be tied
+            self.policy.state_encoder.copy_conv_weights_from(self.critic.state_encoder)
+            # decoder
+            self.decoder = StateDecoder(cfg.dim_latent, num_inputs).to(device=self.device)
+            # optimizer for critic encoder for reconstruction loss
+            self.encoder_optim = Adam(self.critic.state_encoder.parameters(), lr=cfg.lr)
+            # optimizer for decoder
+            self.decoder_optim = Adam(self.decoder.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+            self.latent_lambda = cfg.latent_lambda
+        
+
+        if self.policy_type == "Gaussian" and self.automatic_entropy_tuning:
             # Target Entropy = −dim(A) (e.g. , -6 for HalfCheetah-v2) as given in the paper
-            if self.automatic_entropy_tuning is True:
-                self.target_entropy = -torch.prod(torch.Tensor((dim_action)).to(self.device)).item()
-                self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
-                self.alpha_optim = Adam([self.log_alpha], lr=cfg.lr)
-
-            self.policy = GaussianPolicy(num_inputs, dim_action, cfg.hidden_size).to(self.device)
-            self.policy_optim = Adam(self.policy.parameters(), lr=cfg.lr, weight_decay=cfg.policy_weight_decay)
-
+            self.target_entropy = -torch.prod(torch.Tensor((dim_action)).to(self.device)).item()
+            self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
+            self.alpha_optim = Adam([self.log_alpha], lr=cfg.lr)
         else:
             self.alpha = 0
             self.automatic_entropy_tuning = False
-            self.policy = DeterministicPolicy(num_inputs, dim_action, cfg.hidden_size).to(self.device)
-            self.policy_optim = Adam(self.policy.parameters(), lr=cfg.lr, weight_decay=cfg.policy_weight_decay)
         
         # self.ce_loss = torch.nn.CrossEntropyLoss(reduction='none')
         self.nll_loss = torch.nn.NLLLoss(reduction='none')
         self.mse_loss = torch.nn.MSELoss(reduction='none')
 
+
+    def create_actor_critics(self, num_inputs, dim_action, cfg):
+        
+        critic = QNetwork(num_inputs, dim_action, cfg.hidden_size, dim_latent=cfg.dim_latent, arch_type=cfg.arch_type).to(device=self.device)
+        critic_target = QNetwork(num_inputs, dim_action, cfg.hidden_size, dim_latent=cfg.dim_latent, arch_type=cfg.arch_type).to(self.device)
+        if self.policy_type == "Gaussian":
+            policy = GaussianPolicy(num_inputs, dim_action, cfg.hidden_size, dim_latent=cfg.dim_latent, arch_type=cfg.arch_type).to(self.device)
+        else:
+            policy = DeterministicPolicy(num_inputs, dim_action, cfg.hidden_size, dim_latent=cfg.dim_latent, arch_type=cfg.arch_type).to(self.device)
+
+        return policy, critic, critic_target
+
     
     def set_status(self, phase='train'):
-        if phase == 'train':
-            self.policy.train()
-            self.critic.train()
-            self.critic_target.train()
-        elif phase == 'eval':
-            self.policy.eval()
-            self.critic.eval()
-            self.critic_target.eval()
-        else:
-            raise NotImplementedError
+        isTraining = True if phase == 'train' else False
+        self.policy.train(isTraining)
+        self.critic.train(isTraining)
+        self.critic_target.train(isTraining)
+        if self.arch_type == 'rae':
+            self.decoder.train(isTraining) 
 
 
     def select_action(self, state, rnn_state=None, evaluate=False):
@@ -113,9 +129,9 @@ class SAC(object):
 
 
     def update_actor(self, state_batch, rnn_state_batch, labels_batch):
-        pi, _, log_pi, mean_action = self.policy.sample(state_batch, rnn_state_batch)
-
-        qf1_pi, qf2_pi = self.critic(state_batch, pi)
+        # Note: detach is useless when SAC.arch_type == 'mlp'
+        pi, _, log_pi, mean_action = self.policy.sample(state_batch, rnn_state_batch, detach=True)
+        qf1_pi, qf2_pi = self.critic(state_batch, pi, detach=True)
         min_qf_pi = torch.min(qf1_pi, qf2_pi)
         
         # actor loss
@@ -157,6 +173,27 @@ class SAC(object):
         return alpha_loss, alpha_tlogs
 
 
+    def update_decoder(self, state, latent_lambda=0.0):
+        # encoder
+        h = self.critic.state_encoder(state)
+        # decoder
+        state_rec = self.decoder(h)
+        # MSE reconstruction loss
+        rec_loss = F.mse_loss(state, state_rec)
+        # add L2 penalty on latent representation
+        # see https://arxiv.org/pdf/1903.12436.pdf
+        latent_loss = (0.5 * h.pow(2).sum(1)).mean()
+
+        loss = rec_loss + latent_lambda * latent_loss
+        self.encoder_optim.zero_grad()
+        self.decoder_optim.zero_grad()
+        loss.backward()
+        self.encoder_optim.step()
+        self.decoder_optim.step()
+
+        return loss
+
+
     def update_parameters(self, memory, updates):
         
         # sampling from replay buffer memory
@@ -176,6 +213,10 @@ class SAC(object):
         if updates % self.target_update_interval == 0:
             soft_update(self.critic_target, self.critic, self.tau)
 
+        # update decoder
+        if self.arch_type == 'rae':
+            loss_ae = self.update_decoder(state_batch, latent_lambda=self.latent_lambda)
+
         # gather results
         losses = {'critic': qf_loss.item(), 
                   'actor': actor_loss.item(), 
@@ -183,6 +224,8 @@ class SAC(object):
                   'fixation': fix_loss.item(), 
                   'policy_total': policy_loss.item(), 
                   'alpha': alpha_loss.item()}
+        if self.arch_type == 'rae':
+            losses.update({'autoencoder': loss_ae.item()})
         alpha_values = alpha_tlogs.item()
         return losses, alpha_values
 
