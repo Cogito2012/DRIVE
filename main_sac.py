@@ -19,27 +19,8 @@ from torch.utils.tensorboard import SummaryWriter
 
 from src.enviroment import DashCamEnv
 from RLlib.SAC.sac import SAC
+from RLlib.SAC.replay_buffer import ReplayMemory, ReplayMemoryGPU
 from metrics.eval_tools import evaluation_accident, evaluation_fixation
-
-class ReplayMemory:
-    def __init__(self, capacity):
-        self.capacity = capacity
-        self.buffer = []
-        self.position = 0
-
-    def push(self, state, action, reward, next_state, rnn_state, labels, done):
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(None)
-        self.buffer[self.position] = (state, action, reward, next_state, rnn_state, labels, done)
-        self.position = (self.position + 1) % self.capacity
-
-    def sample(self, batch_size):
-        batch = random.sample(self.buffer, batch_size)
-        state, action, reward, next_state, rnn_state, labels, done = map(np.stack, zip(*batch))
-        return state, action, reward, next_state, rnn_state, labels, done
-
-    def __len__(self):
-        return len(self.buffer)
 
 
 def parse_configs():
@@ -62,7 +43,7 @@ def parse_configs():
     with open(args.config, 'r') as f:
         cfg = EasyDict(yaml.load(f))
     cfg.update(vars(args))
-    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     cfg.update(device=device)
 
     return cfg
@@ -126,14 +107,15 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
         episode_reward = 0
         episode_steps = 0
         done = False
-        rnn_state = np.zeros((2, cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=np.float32)
+        rnn_state = (torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device),
+                     torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device))
 
         while not done:
             # select action
             action, rnn_state = agent.select_action(state, rnn_state)
 
             # Update parameters of all the networks
-            if len(memory) > cfg.SAC.batch_size:
+            if memory.position > cfg.SAC.batch_size:
                 # Number of updates per step in environment
                 for _ in range(cfg.SAC.updates_per_step):
                     outputs = agent.update_parameters(memory, updates)
@@ -152,10 +134,10 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
             cur_time = (env.cur_step-1) * env.step_size / env.fps
             gt_fix_next = info['gt_fixation']
             labels = np.array([cur_time, env.clsID, env.begin_accident, gt_fix_next[0], gt_fix_next[1]], dtype=np.float32)
-            memory.push(state.flatten(), action.flatten(), reward, next_state.flatten(), rnn_state.reshape(-1, cfg.SAC.hidden_size), labels, mask) # Append transition to memory
+            memory.push(state, action, reward, next_state, rnn_state, labels, mask) # Append transition to memory
 
             # shift to next state
-            state = next_state.copy()
+            state = next_state.clone()
 
         # i_episode = epoch * len(traindata_loader) + i
         # avg_reward = episode_reward / episode_steps
@@ -174,8 +156,8 @@ def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
                                                                                     desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         # set environment data
         state = env.set_data(video_data, coord_data)
-
-        rnn_state = np.zeros((2, cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=np.float32)
+        rnn_state = (torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device),
+                     torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device))
         episode_reward = 0
         episode_steps = 0
         done = False
@@ -183,16 +165,9 @@ def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
             # select action
             action, rnn_state = agent.select_action(state, rnn_state, evaluate=True)
             # step
-            next_state, reward, done, info = env.step(action)
+            state, reward, done, info = env.step(action)
             episode_reward += reward
             episode_steps += 1
-            # transition
-            state = next_state
-        
-        # logging
-        # i_episode = epoch * len(evaldata_loader) + i
-        # avg_reward = episode_reward / episode_steps
-        # writer.add_scalar('reward/test_per_video', avg_reward, i_episode)
 
         total_reward += episode_reward
     writer.add_scalar('reward/test_per_epoch', total_reward, epoch)
@@ -219,7 +194,7 @@ def train():
     agent = SAC(env.dim_state, env.dim_action, cfg.SAC, device=cfg.device)
 
     # Memory
-    memory = ReplayMemory(cfg.SAC.replay_size)
+    memory = ReplayMemory(cfg.SAC.replay_size) if not cfg.SAC.gpu_replay else ReplayMemoryGPU(cfg)
 
     updates = 0
     for e in range(cfg.num_epoch):

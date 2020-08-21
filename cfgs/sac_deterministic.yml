@@ -8,7 +8,7 @@ ENV:
   len_clip: 1
   max_frames: 120    # 600/5, 20 seconds
   binary_cls: true
-  num_workers: 0
+  num_workers: 2
   dim_state: 128
   dim_action: 3
   score_thresh: 0.7
@@ -37,3 +37,4 @@ SAC:
   arch_type: "mlp"  # mlp or rae
   dim_latent: 64    # only useful when rae
   latent_lambda: 0.0001
+  gpu_replay: true

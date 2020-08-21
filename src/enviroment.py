@@ -103,9 +103,8 @@ class DashCamEnv(core.Env):
 
         # observation by computing saliency
         with torch.no_grad():
-            state = self.observe(frame_data)  # (1, 128)
-            self.cur_state = state.cpu().numpy()
-        return self.cur_state
+            self.cur_state = self.observe(frame_data)  # GPU Array(1, 128)
+        return self.cur_state.detach()
 
 
     def observe(self, data_input):
@@ -199,7 +198,7 @@ class DashCamEnv(core.Env):
 
         with torch.no_grad():
             next_state = self.observe(frame_next)
-        return next_state.cpu().numpy()
+        return next_state.detach()
 
 
     def get_reward(self, fixation_pred, score):
@@ -253,13 +252,13 @@ class DashCamEnv(core.Env):
             info.update({'gt_fixation': self.point_to_scales(self.coord_data[(self.cur_step + 1)*self.step_size, :2])})  # ground truth of the next fixation
         else:
             # The last step
-            next_state = self.cur_state.copy()
+            next_state = self.cur_state.clone()  # GPU array
             cur_reward = 0.0
             done = True
             info.update({'gt_fixation': self.point_to_scales(self.coord_data[self.cur_step*self.step_size, :2])})  # ground truth of the next fixation
 
         self.cur_step += 1
-        self.cur_state = next_state.copy()
+        self.cur_state = next_state.clone()
 
         return next_state, cur_reward, done, info
 

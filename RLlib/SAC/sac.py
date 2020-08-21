@@ -80,34 +80,14 @@ class SAC(object):
 
 
     def select_action(self, state, rnn_state=None, evaluate=False):
-        state = torch.FloatTensor(state).to(self.device)
-        if rnn_state is not None:
-            rnn_state = (torch.from_numpy(rnn_state[0]).to(self.device), torch.from_numpy(rnn_state[1]).to(self.device))
-
         if evaluate is False:
             action, rnn_state, _, _ = self.policy.sample(state, rnn_state)
         else:
             _, rnn_state, _, action = self.policy.sample(state, rnn_state)
-        
+        action = action.detach().cpu().numpy()[0]
         if rnn_state is not None:
-            rnn_state = torch.cat((rnn_state[0].unsqueeze(0), rnn_state[1].unsqueeze(0)), dim=0).detach().cpu().numpy()
-        return action.detach().cpu().numpy()[0], rnn_state
-
-
-    def sample_from_buffer(self, memory):
-        # Sample a batch from memory
-        state_batch, action_batch, reward_batch, next_state_batch, rnn_state_batch, labels_batch, mask_batch = memory.sample(batch_size=self.batch_size)
-        if rnn_state_batch[:, 0] is not None:
-            rnn_state_batch = (torch.from_numpy(rnn_state_batch[:, 0]).to(self.device), torch.from_numpy(rnn_state_batch[:, 1]).to(self.device))
-
-        state_batch = torch.FloatTensor(state_batch).to(self.device)
-        action_batch = torch.FloatTensor(action_batch).to(self.device)
-        reward_batch = torch.FloatTensor(reward_batch).to(self.device).unsqueeze(1)
-        next_state_batch = torch.FloatTensor(next_state_batch).to(self.device)
-        labels_batch = torch.FloatTensor(labels_batch).to(self.device)
-        mask_batch = torch.FloatTensor(mask_batch).to(self.device).unsqueeze(1)
-
-        return state_batch, action_batch, reward_batch, next_state_batch, mask_batch, rnn_state_batch, labels_batch
+            rnn_state = (rnn_state[0].detach(), rnn_state[1].detach())
+        return action, rnn_state
 
 
     def update_critic(self, state_batch, action_batch, reward_batch, next_state_batch, mask_batch, rnn_state_batch):
@@ -197,8 +177,7 @@ class SAC(object):
     def update_parameters(self, memory, updates):
         
         # sampling from replay buffer memory
-        state_batch, action_batch, reward_batch, next_state_batch, mask_batch, rnn_state_batch, labels_batch = \
-            self.sample_from_buffer(memory)
+        state_batch, action_batch, reward_batch, next_state_batch, rnn_state_batch, labels_batch, mask_batch = memory.sample(self.batch_size, self.device)
 
         # update critic networks
         qf_loss = self.update_critic(state_batch, action_batch, reward_batch, next_state_batch, mask_batch, rnn_state_batch)
