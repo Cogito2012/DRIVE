@@ -20,20 +20,20 @@ ENV:
 SAC:
   gamma: 0.99
   tau: 0.005
-  lr: 0.001
+  lr: 0.0003
   num_classes: 2
   hidden_size: 64
   policy: "Gaussian"
   target_update_interval: 1000
   automatic_entropy_tuning: true
   alpha: 0.001
-  beta_actor: 0.001
+  beta_actor: 0.01
   beta_fix: 1.0
   replay_size: 1000000
   batch_size: 256
   updates_per_step: 4
   logging_interval: 100
-  weight_decay: 0.00001
+  weight_decay: 0.0005
   arch_type: "rae"  # mlp or rae
   dim_latent: 64    # only useful when rae
   latent_lambda: 0.0001
