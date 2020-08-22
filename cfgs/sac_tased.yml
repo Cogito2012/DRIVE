@@ -14,7 +14,7 @@ ENV:
   score_thresh: 0.7
   use_salmap: false  # set to False to speedup data loading
   use_foveation: true
-  state_norm: false
+  state_norm: true
   saliency: 'TASED-Net'
   env_model: ./models/saliency/tasednet_iter_1000.pt
 SAC:

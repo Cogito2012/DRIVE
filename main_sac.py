@@ -9,6 +9,7 @@ from easydict import EasyDict
 
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
+from prefetch_generator import BackgroundGenerator
 from torchvision import transforms
 
 from src.DADALoader import DADALoader
@@ -70,19 +71,19 @@ def setup_dataloader(cfg, isTraining=True):
     if not isTraining:
         test_data = DADALoader(cfg.data_path, 'testing', interval=cfg.frame_interval, max_frames=-1, 
                                 transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_focus=cfg.use_salmap)
-        testdata_loader = DataLoader(dataset=test_data, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
+        testdata_loader = BackgroundGenerator(DataLoader(dataset=test_data, batch_size=1, shuffle=False, num_workers=0, pin_memory=True))
         print("# test set: %d"%(len(test_data)))
         return testdata_loader
 
     # training dataset
     train_data = DADALoader(cfg.data_path, 'training', interval=cfg.frame_interval, max_frames=cfg.max_frames, 
                             transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_focus=cfg.use_salmap)
-    traindata_loader = DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, pin_memory=True)
+    traindata_loader = BackgroundGenerator(DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, pin_memory=True))
 
     # validataion dataset
     eval_data = DADALoader(cfg.data_path, 'validation', interval=cfg.frame_interval, max_frames=cfg.max_frames, 
                             transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_focus=cfg.use_salmap)
-    evaldata_loader = DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers, pin_memory=True)
+    evaldata_loader = BackgroundGenerator(DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers, pin_memory=True))
     print("# train set: %d, eval set: %d"%(len(train_data), len(eval_data)))
 
     return traindata_loader, evaldata_loader
@@ -115,7 +116,7 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
             action, rnn_state = agent.select_action(state, rnn_state)
 
             # Update parameters of all the networks
-            if memory.position > cfg.SAC.batch_size:
+            if len(memory) > cfg.SAC.batch_size:
                 # Number of updates per step in environment
                 for _ in range(cfg.SAC.updates_per_step):
                     outputs = agent.update_parameters(memory, updates)
@@ -138,10 +139,6 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
 
             # shift to next state
             state = next_state.clone()
-
-        # i_episode = epoch * len(traindata_loader) + i
-        # avg_reward = episode_reward / episode_steps
-        # writer.add_scalar('reward/train_per_video', avg_reward, i_episode)
 
         reward_total += episode_reward
     writer.add_scalar('reward/train_per_epoch', reward_total, epoch)
@@ -180,6 +177,10 @@ def train():
     env.set_model(pretrained=True, weight_file=cfg.ENV.env_model)
     cfg.ENV.output_shape = env.output_shape
 
+    # backup the config file
+    with open(os.path.join(cfg.output, 'cfg.yml'), 'w') as bkfile:
+        yaml.dump(cfg, bkfile, default_flow_style=False)
+        
     # prepare output directory
     ckpt_dir = os.path.join(cfg.output, 'checkpoints')
     if not os.path.exists(ckpt_dir):

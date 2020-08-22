@@ -50,6 +50,7 @@ class ReplayMemoryGPU:
         # (state, action, reward, next_state, rnn_state, labels, done)
         self.dim_mem = self.dim_state + self.dim_action + 1 + self.dim_state + 2 * self.dim_hidden + self.dim_labels + 1
         self.position, self.buffer = self.create_buffer()
+        self.length = 0
 
     def create_buffer(self):
         nvmlInit()
@@ -82,6 +83,7 @@ class ReplayMemoryGPU:
         # insert the transition into buffer
         self.buffer[self.position] = transition
         self.position = (self.position + 1) % self.capacity
+        self.length += 1
 
     def sample(self, batch_size, device):
         """Sampling on GPU device"""
@@ -103,3 +105,6 @@ class ReplayMemoryGPU:
         start, end = start + self.dim_labels, end + 1
         mask = data_batch[:, start: end].unsqueeze(1)
         return state, action, reward, next_state, rnn_state, labels, mask
+
+    def __len__(self):
+        return self.length
