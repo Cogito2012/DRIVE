@@ -71,19 +71,19 @@ def setup_dataloader(cfg, isTraining=True):
     if not isTraining:
         test_data = DADALoader(cfg.data_path, 'testing', interval=cfg.frame_interval, max_frames=-1, 
                                 transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_focus=cfg.use_salmap)
-        testdata_loader = BackgroundGenerator(DataLoader(dataset=test_data, batch_size=1, shuffle=False, num_workers=0, pin_memory=True))
+        testdata_loader = DataLoader(dataset=test_data, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
         print("# test set: %d"%(len(test_data)))
         return testdata_loader
 
     # training dataset
     train_data = DADALoader(cfg.data_path, 'training', interval=cfg.frame_interval, max_frames=cfg.max_frames, 
                             transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_focus=cfg.use_salmap)
-    traindata_loader = BackgroundGenerator(DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, pin_memory=True))
+    traindata_loader = DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, pin_memory=True)
 
     # validataion dataset
     eval_data = DADALoader(cfg.data_path, 'validation', interval=cfg.frame_interval, max_frames=cfg.max_frames, 
                             transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_focus=cfg.use_salmap)
-    evaldata_loader = BackgroundGenerator(DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers, pin_memory=True))
+    evaldata_loader = DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers, pin_memory=True)
     print("# train set: %d, eval set: %d"%(len(train_data), len(eval_data)))
 
     return traindata_loader, evaldata_loader
@@ -101,7 +101,7 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
     """ Training process for each epoch of dataset
     """
     reward_total = 0
-    for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), 
+    for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(BackgroundGenerator(traindata_loader)), total=len(traindata_loader), 
                                                                                      desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         # set environment data
         state = env.set_data(video_data, coord_data)
@@ -149,7 +149,7 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
 def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
     
     total_reward = 0
-    for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), 
+    for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(BackgroundGenerator(evaldata_loader)), total=len(evaldata_loader), 
                                                                                     desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         # set environment data
         state = env.set_data(video_data, coord_data)
@@ -177,16 +177,15 @@ def train():
     env.set_model(pretrained=True, weight_file=cfg.ENV.env_model)
     cfg.ENV.output_shape = env.output_shape
 
-    # backup the config file
-    with open(os.path.join(cfg.output, 'cfg.yml'), 'w') as bkfile:
-        yaml.dump(cfg, bkfile, default_flow_style=False)
-        
     # prepare output directory
     ckpt_dir = os.path.join(cfg.output, 'checkpoints')
     if not os.path.exists(ckpt_dir):
         os.makedirs(ckpt_dir)
     #Tesnorboard
     writer = SummaryWriter(cfg.output + '/tensorboard/train_{}'.format(datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")))
+    # backup the config file
+    with open(os.path.join(cfg.output, 'cfg.yml'), 'w') as bkfile:
+        yaml.dump(cfg, bkfile, default_flow_style=False)
     
     # initialize dataset
     traindata_loader, evaldata_loader = setup_dataloader(cfg.ENV)
@@ -244,7 +243,7 @@ def test():
         # start to test 
         agent.set_status('eval')
         save_dict = {'score_preds': [], 'fix_preds': [], 'gt_labels': [], 'gt_fixes': [], 'toas': [], 'vids': []}
-        for i, (video_data, _, coord_data, data_info) in enumerate(testdata_loader):  # (B, T, H, W, C)
+        for i, (video_data, _, coord_data, data_info) in enumerate(BackgroundGenerator(testdata_loader)):  # (B, T, H, W, C)
             print("Testing video %d/%d, file: %d/%d.avi, frame #: %d (fps=%.2f)."
                 %(i+1, len(testdata_loader), data_info[0, 0], data_info[0, 1], video_data.size(1), 30/cfg.ENV.frame_interval))
             # set environment data
