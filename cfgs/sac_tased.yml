@@ -4,7 +4,7 @@ ENV:
   image_shape: [660, 1584]
   input_shape: [480, 640]
   frame_interval: 1
-  step_size: 4
+  step_size: 8
   len_clip: 16
   max_frames: 600  # 20 seconds
   binary_cls: true
