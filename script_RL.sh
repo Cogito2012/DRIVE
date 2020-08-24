@@ -3,8 +3,8 @@
 source activate pyRL
 
 PHASE=$1
-EXP_TAG=$2
-GPU_IDS=$3
+GPU_IDS=$2
+EXP_TAG=$3
 
 LOG_DIR="./logs/${EXP_TAG}"
 if [ ! -d $LOG_DIR ]; then
@@ -21,9 +21,6 @@ echo Logging output to "$LOG"
 # CUDA_VISIBLE_DEVICES=$GPU_IDS python main_reinforce.py --output ./output/${EXP_TAG} --phase ${PHASE} --config cfgs/reinforce_default.yml
 # CUDA_VISIBLE_DEVICES=$GPU_IDS python main_reinforce.py --binary_cls --alpha 0 --output ./output/REINFORCE_alpha0
 
-CUDA_VISIBLE_DEVICES=$GPU_IDS python main_sac.py --output ./output/${EXP_TAG} --phase ${PHASE} --config cfgs/sac_ae_default.yml
-# CUDA_VISIBLE_DEVICES=$GPU_IDS python main_sac.py --output ./output/${EXP_TAG} --phase ${PHASE} --config cfgs/sac_tased.yml
-# CUDA_VISIBLE_DEVICES=$GPU_IDS python main_sac.py --output ./output/${EXP_TAG} --phase ${PHASE} --config cfgs/sac_default.yml --test_epoch 40
-# CUDA_VISIBLE_DEVICES=$GPU_IDS python main_sac.py --output ./output/${EXP_TAG}_det --config cfgs/sac_deterministic.yml
+CUDA_VISIBLE_DEVICES=$GPU_IDS python main_sac.py --output ./output/${EXP_TAG} --phase ${PHASE} --config cfgs/sac_ae_mlnet.yml
 
 echo "Done!"
