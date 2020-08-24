@@ -87,7 +87,9 @@ class ReplayMemoryGPU:
 
     def sample(self, batch_size, device):
         """Sampling on GPU device"""
-        indices = torch.LongTensor(np.random.randint(0, self.position, size=batch_size)).to(device)
+        assert self.length > batch_size, "Not enough transitions!"
+        indices = np.random.randint(0, self.length, size=batch_size) % self.capacity
+        indices = torch.LongTensor(indices).to(device)
         data_batch = torch.index_select(self.buffer, 0, indices)
         # parse the results
         start, end = 0, self.dim_state
