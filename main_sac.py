@@ -9,7 +9,7 @@ from easydict import EasyDict
 
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
-from prefetch_generator import BackgroundGenerator
+# from prefetch_generator import BackgroundGenerator
 from torchvision import transforms
 
 from src.DADALoader import DADALoader
@@ -101,7 +101,7 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
     """ Training process for each epoch of dataset
     """
     reward_total = 0
-    for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(BackgroundGenerator(traindata_loader)), total=len(traindata_loader), 
+    for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), 
                                                                                      desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         # set environment data
         state = env.set_data(video_data, coord_data)
@@ -149,7 +149,7 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
 def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
     
     total_reward = 0
-    for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(BackgroundGenerator(evaldata_loader)), total=len(evaldata_loader), 
+    for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), 
                                                                                     desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         # set environment data
         state = env.set_data(video_data, coord_data)
@@ -243,7 +243,7 @@ def test():
         # start to test 
         agent.set_status('eval')
         save_dict = {'score_preds': [], 'fix_preds': [], 'gt_labels': [], 'gt_fixes': [], 'toas': [], 'vids': []}
-        for i, (video_data, _, coord_data, data_info) in enumerate(BackgroundGenerator(testdata_loader)):  # (B, T, H, W, C)
+        for i, (video_data, _, coord_data, data_info) in enumerate(testdata_loader):  # (B, T, H, W, C)
             print("Testing video %d/%d, file: %d/%d.avi, frame #: %d (fps=%.2f)."
                 %(i+1, len(testdata_loader), data_info[0, 0], data_info[0, 1], video_data.size(1), 30/cfg.ENV.frame_interval))
             # set environment data
