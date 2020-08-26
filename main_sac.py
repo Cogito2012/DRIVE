@@ -250,7 +250,8 @@ def test():
             state = env.set_data(video_data, coord_data)
 
             # init vars before each episode
-            rnn_state = np.zeros((2, cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=np.float32)
+            rnn_state = (torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device),
+                         torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device))
             done = False
             pred_scores, pred_fixes, gt_fixes = [], [], []
             while not done:
@@ -260,18 +261,12 @@ def test():
                 pred_fixes.append(next_fixation)
                 # gather ground truth of next fixation
                 gt_fixes.append(env.coord_data[(env.cur_step + 1) * env.step_size, :2])
-
-                # accident_pred = action[2:]
-                # score = np.exp(accident_pred[1]) / np.sum(np.exp(accident_pred))
-                # pred_scores.append(score)
                 score = 0.5 * (action[2] + 1.0)
                 pred_scores.append(score)
 
                 # step
-                next_state, reward, done, _ = env.step(action)
-                # transition
-                state = next_state
-            # gt_fixes = env.coord_data[:, :2]
+                state, reward, done, _ = env.step(action)
+                
             gt_fixes = np.vstack(gt_fixes)
             # save results
             save_dict['score_preds'].append(np.array(pred_scores, dtype=np.float32))
@@ -279,7 +274,7 @@ def test():
             save_dict['gt_labels'].append(env.clsID)
             save_dict['gt_fixes'].append(gt_fixes)
             save_dict['toas'].append(env.begin_accident)
-            save_dict['vids'].append(data_info[0, 1])
+            save_dict['vids'].append(data_info[:,:2].numpy())
             
         np.save(result_file, save_dict)
 
@@ -307,6 +302,7 @@ if __name__ == "__main__":
     if cfg.phase == 'train':
         train()
     elif cfg.phase == 'test':
-        test()
+        with torch.no_grad():
+            test()
     else:
         raise NotImplementedError
