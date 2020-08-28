@@ -147,5 +147,5 @@ metrics/saliency/code_forMetrics
 *.pt
 *.pth
 *.pth.tar
-data/DADA-2000
+data/DADA-2000*
 *_tmp*
