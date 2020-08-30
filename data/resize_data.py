@@ -1,28 +1,32 @@
 import os, cv2, shutil
 import numpy as np
+import argparse
 
 def read_coords(coord_file):
-    coord_data = []
+    coord_data, inds_pos = [], []
     assert os.path.exists(coord_file), "File does not exist! %s"%coord_file
     with open(coord_file, 'r') as f:
-        for line in f.readlines():
+        for ind, line in enumerate(f.readlines()):
             x_coord = int(line.strip().split(',')[0])
             y_coord = int(line.strip().split(',')[1])
+            if x_coord > 0 and y_coord > 0:
+                inds_pos.append(ind)
             coord_data.append([x_coord, y_coord])
     coord_data = np.array(coord_data, dtype=np.int32)
-    return coord_data
+    inds_pos = np.array(inds_pos, dtype=np.int32)
+    return coord_data, inds_pos
 
-def write_coords(coord_data, coord_file):
+def write_coords(coord_data, frame_ids, coord_file):
     coord_dir = os.path.dirname(coord_file)
     if not os.path.exists(coord_dir):
         os.makedirs(coord_dir)
     with open(coord_file, 'w') as f:
-        for coord in coord_data:
-            x_coord = int(coord[0])
-            y_coord = int(coord[1])
+        for i in frame_ids:
+            x_coord = int(coord_data[i, 0])
+            y_coord = int(coord_data[i, 1])
             f.writelines('%d,%d\n'%(x_coord, y_coord))
 
-def resize_video(src_file, dst_file, ratio):
+def reduce_video(src_file, dst_file, ratio, frame_ids):
     assert os.path.exists(src_file), "File does not exist! %s"%src_file
     video_dir = os.path.dirname(dst_file)
     if not os.path.exists(video_dir):
@@ -30,17 +34,19 @@ def resize_video(src_file, dst_file, ratio):
     # video capture of src video
     cap_src = cv2.VideoCapture(src_file)
     ret, frame = cap_src.read()
+    ind = 0
     # dest capture
     dst_size = (int(frame.shape[1] * ratio), int(frame.shape[0] * ratio))  # (width, height)
     cap_dst = cv2.VideoWriter(dst_file, cv2.VideoWriter_fourcc(*'XVID'), 30, dst_size)
-    while (ret):
+    while (ret and ind in frame_ids):
         frame_resize = cv2.resize(frame, dst_size)
         cap_dst.write(frame_resize)
         # read next frame
         ret, frame = cap_src.read()
+        ind += 1
     
 
-def resize_data(data_path, ratio, subset, result_path):
+def reduce_data(data_path, ratio, subset, result_path):
     # the input path
     coord_path_src = os.path.join(data_path, subset, 'coordinate')
     focus_path_src = os.path.join(data_path, subset, 'focus_videos')
@@ -57,28 +63,36 @@ def resize_data(data_path, ratio, subset, result_path):
             print("Processing the video: %s/%s"%(accID, vid))
             # read the coordinates
             coord_file_src = os.path.join(txtfile_dir, filename)
-            coord_data = read_coords(coord_file_src)
+            coord_data, inds_pos = read_coords(coord_file_src)
+            # remove the frames after accident ends
+            frame_ids = np.arange(0, min(inds_pos[-1] + 1 + 16, coord_data.shape[0]))
             # resize & write coords
             coord_file_dst = os.path.join(coord_path_dst, accID, filename)
-            write_coords(ratio * coord_data, coord_file_dst)
+            write_coords(ratio * coord_data, frame_ids, coord_file_dst)
 
             # read focus videos
             focus_video_src = os.path.join(focus_path_src, accID, vid + '.avi')
             focus_video_dst = os.path.join(focus_path_dst, accID, vid + '.avi')
-            resize_video(focus_video_src, focus_video_dst, ratio)
+            reduce_video(focus_video_src, focus_video_dst, ratio, frame_ids)
             # read rgb videos
             rgb_video_src = os.path.join(video_path_src, accID, vid + '.avi')
             rgb_video_dst = os.path.join(video_path_dst, accID, vid + '.avi')
-            resize_video(rgb_video_src, rgb_video_dst, ratio)
+            reduce_video(rgb_video_src, rgb_video_dst, ratio, frame_ids)
 
 
 if __name__ == "__main__":
-    data_path = './DADA-2000'
-    ratio = 0.5
-    result_path = './DADA-2000-small'
-    if not os.path.exists(result_path):
-        os.makedirs(result_path)
 
-    resize_data(data_path, ratio, 'training', result_path)
-    resize_data(data_path, ratio, 'testing', result_path)
-    resize_data(data_path, ratio, 'validation', result_path)
+    parser = argparse.ArgumentParser(description='Reduce the size of DADA-2000')
+    parser.add_argument('--data_path', default="./DADA-2000",
+                        help='Directory to the original DADA-2000 folder.')
+    parser.add_argument('--result_path', default="./DADA-2000-small",
+                        help='Directory to the result DADA-2000 folder.')
+    args = parser.parse_args()
+
+    ratio = 0.5
+    if not os.path.exists(args.result_path):
+        os.makedirs(args.result_path)
+
+    reduce_data(args.data_path, ratio, 'training', args.result_path)
+    reduce_data(args.data_path, ratio, 'testing', args.result_path)
+    reduce_data(args.data_path, ratio, 'validation', args.result_path)
