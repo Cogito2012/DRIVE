@@ -29,6 +29,8 @@ def write_coords(coord_data, frame_ids, coord_file):
 def reduce_video(src_file, dst_file, ratio, frame_ids):
     assert os.path.exists(src_file), "File does not exist! %s"%src_file
     video_dir = os.path.dirname(dst_file)
+    if os.path.exists(dst_file):
+        return
     if not os.path.exists(video_dir):
         os.makedirs(video_dir)
     # video capture of src video
@@ -61,9 +63,10 @@ def reduce_data(data_path, ratio, subset, result_path):
         for filename in sorted(os.listdir(txtfile_dir)):
             vid = filename.split('_')[0]
             print("Processing the video: %s/%s"%(accID, vid))
-            # read the coordinates
             coord_file_src = os.path.join(txtfile_dir, filename)
             coord_data, inds_pos = read_coords(coord_file_src)
+            if inds_pos.shape[0] == 0:
+                continue  # ignore videos without any accident
             # remove the frames after accident ends
             frame_ids = np.arange(0, min(inds_pos[-1] + 1 + 16, coord_data.shape[0]))
             # resize & write coords
