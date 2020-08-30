@@ -79,7 +79,7 @@ def padding_point(point, img_shape, shape_r=480, shape_c=640):
         r, c = scale_point(point, img_shape, rows=new_rows, cols=shape_c)
         # shifting
         r = r + (shape_r - new_rows) // 2
-    new_point = np.array([c, r], dtype=np.int64)  # (x, y)
+    new_point = np.array([c, r], dtype=np.int32)  # (x, y)
     return new_point
 
 
@@ -101,12 +101,12 @@ class ProcessImages(object):
         t, h, w, c = imgs.shape
         shape_r, shape_c = self.input_shape
         
-        ims = np.zeros((t, shape_r, shape_c, c), dtype=np.float64)
+        ims = np.zeros((t, shape_r, shape_c, c), dtype=np.float32)
         for i, im in enumerate(imgs):
             padded_image = padding(im, shape_r, shape_c, c)
             if c == 1:
                 padded_image = np.expand_dims(padded_image, axis=-1)
-            ims[i] = padded_image.astype(np.float64)
+            ims[i] = padded_image.astype(np.float32)
         # normalize
         ims /= 255.0
         ims = np.rollaxis(ims, 3, 1)  # (t, c, h, w)
@@ -133,7 +133,7 @@ class ProcessFixations(object):
         coords: fixation points, (L, 2) x, y
         """
         shape_r, shape_c = self.input_shape
-        new_coords = np.zeros_like(coords, dtype=np.int64)
+        new_coords = np.zeros_like(coords, dtype=np.int32)
         for i, fixpt in enumerate(coords):
             if fixpt[0] > 0 and fixpt[1] > 0:
                 new_coords[i] = padding_point(fixpt, self.img_shape, shape_r, shape_c)

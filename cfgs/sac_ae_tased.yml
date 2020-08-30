@@ -1,14 +1,14 @@
 ENV:
-  data_path: ./data/DADA-2000
+  data_path: ./data/DADA-2000-small
   batch_size: 1
-  image_shape: [660, 1584]
+  image_shape: [330, 792]
   input_shape: [480, 640]
   frame_interval: 1
   step_size: 8
   len_clip: 16
-  max_frames: 600  # 20 seconds
+  max_frames: -1
   binary_cls: true
-  num_workers: 2
+  num_workers: 1
   dim_state: 384
   dim_action: 3
   score_thresh: 0.7
@@ -31,7 +31,7 @@ SAC:
   beta_fix: 1.0
   replay_size: 1000000
   batch_size: 256
-  updates_per_step: 4
+  updates_per_step: 1
   logging_interval: 100
   weight_decay: 0.00001
   arch_type: "rae"  # mlp or rae

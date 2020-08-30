@@ -69,14 +69,14 @@ class DashCamEnv(core.Env):
         assert video_data.size(1) > self.len_clip, "Video is too short! Less than %d frames"%(self.len_clip)
         self.height, self.width = video_data.size(3), video_data.size(4)
         # the following attributes are unchanged or ground truth of environment for an entire video
-        self.video_data = video_data[0].numpy()  # (T, 3, H, W)
+        self.video_data = video_data[0].float().to(self.device, non_blocking=True)  # (T, 3, H, W)
         self.coord_data = coord_data[0].numpy()  # (T, 3)
         
         accident_inds = np.where(self.coord_data[:, 2] > 0)[0]
         if len(accident_inds) > 0:
-            self.max_step = np.minimum(accident_inds[-1] + 1, self.video_data.shape[0] - self.len_clip) // self.step_size
+            self.max_step = np.minimum(accident_inds[-1] + 1, self.video_data.size(0) - self.len_clip) // self.step_size
         else:
-            self.max_step = (self.video_data.shape[0] - self.len_clip) // self.step_size
+            self.max_step = (self.video_data.size(0) - self.len_clip) // self.step_size
         
         cls_set = np.unique(self.coord_data[:, 2].astype(np.int32))
         if len(cls_set) > 1:
@@ -94,7 +94,7 @@ class DashCamEnv(core.Env):
         self.cur_step = 0  # step id of the environment
         self.next_fixation = None
 
-        frame_data = torch.Tensor(self.video_data[self.cur_step*self.step_size: self.cur_step*self.step_size+self.len_clip]).to(self.device, non_blocking=True)  # (T, C, H, W)
+        frame_data = self.video_data[self.cur_step*self.step_size: self.cur_step*self.step_size+self.len_clip]  # (T, C, H, W)
         if self.use_foveation:
             # set the center coordinate as initial fixation
             init_fixation = torch.Tensor([self.width / 2.0, self.height / 2.0]).to(torch.int64).to(device=self.device)
@@ -190,7 +190,7 @@ class DashCamEnv(core.Env):
 
     def get_next_state(self, next_fixation, next_step):
         
-        frame_next = torch.Tensor(self.video_data[next_step * self.step_size: next_step * self.step_size + self.len_clip]).to(self.device, non_blocking=True)  # (T, C, H, W)
+        frame_next = self.video_data[next_step * self.step_size: next_step * self.step_size + self.len_clip]  # (T, C, H, W)
         if self.use_foveation:
             # foveation
             next_fixation = torch.Tensor(next_fixation).to(self.device)

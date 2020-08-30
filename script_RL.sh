@@ -21,6 +21,6 @@ echo Logging output to "$LOG"
 # CUDA_VISIBLE_DEVICES=$GPU_IDS python main_reinforce.py --output ./output/${EXP_TAG} --phase ${PHASE} --config cfgs/reinforce_default.yml
 # CUDA_VISIBLE_DEVICES=$GPU_IDS python main_reinforce.py --binary_cls --alpha 0 --output ./output/REINFORCE_alpha0
 
-CUDA_VISIBLE_DEVICES=$GPU_IDS python main_sac.py --output ./output/${EXP_TAG} --phase ${PHASE} --config cfgs/sac_ae_mlnet.yml --test_epoch 39
+CUDA_VISIBLE_DEVICES=$GPU_IDS python main_sac.py --output ./output/${EXP_TAG} --phase ${PHASE} --config cfgs/sac_tased.yml
 
 echo "Done!"

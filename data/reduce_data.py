@@ -40,15 +40,16 @@ def reduce_video(src_file, dst_file, ratio, frame_ids):
     # dest capture
     dst_size = (int(frame.shape[1] * ratio), int(frame.shape[0] * ratio))  # (width, height)
     cap_dst = cv2.VideoWriter(dst_file, cv2.VideoWriter_fourcc(*'XVID'), 30, dst_size)
-    while (ret and ind in frame_ids):
-        frame_resize = cv2.resize(frame, dst_size)
-        cap_dst.write(frame_resize)
+    while (ret):
+        if ind in frame_ids:
+            frame_resize = cv2.resize(frame, dst_size)
+            cap_dst.write(frame_resize)
         # read next frame
         ret, frame = cap_src.read()
         ind += 1
     
 
-def reduce_data(data_path, ratio, subset, result_path):
+def reduce_data(data_path, ratio, max_frames, subset, result_path):
     # the input path
     coord_path_src = os.path.join(data_path, subset, 'coordinate')
     focus_path_src = os.path.join(data_path, subset, 'focus_videos')
@@ -61,14 +62,18 @@ def reduce_data(data_path, ratio, subset, result_path):
     for accID in sorted(os.listdir(coord_path_src)):
         txtfile_dir = os.path.join(coord_path_src, accID)
         for filename in sorted(os.listdir(txtfile_dir)):
-            vid = filename.split('_')[0]
-            print("Processing the video: %s/%s"%(accID, vid))
             coord_file_src = os.path.join(txtfile_dir, filename)
             coord_data, inds_pos = read_coords(coord_file_src)
             if inds_pos.shape[0] == 0:
                 continue  # ignore videos without any accident
+
             # remove the frames after accident ends
-            frame_ids = np.arange(0, min(inds_pos[-1] + 1 + 16, coord_data.shape[0]))
+            video_end = min(inds_pos[-1] + 1 + 16, coord_data.shape[0])
+            video_start = max(0, video_end - max_frames)
+            frame_ids = np.arange(video_start, video_end)
+
+            vid = filename.split('_')[0]
+            print("Processing the video: %s/%s, # frames: %d"%(accID, vid, len(frame_ids)))
             # resize & write coords
             coord_file_dst = os.path.join(coord_path_dst, accID, filename)
             write_coords(ratio * coord_data, frame_ids, coord_file_dst)
@@ -93,9 +98,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     ratio = 0.5
+    max_frames = 450  # for fps=30, the maxtime=20 s after clipped
     if not os.path.exists(args.result_path):
         os.makedirs(args.result_path)
 
-    reduce_data(args.data_path, ratio, 'training', args.result_path)
-    reduce_data(args.data_path, ratio, 'testing', args.result_path)
-    reduce_data(args.data_path, ratio, 'validation', args.result_path)
+    reduce_data(args.data_path, ratio, max_frames, 'training', args.result_path)
+    reduce_data(args.data_path, ratio, max_frames, 'testing', args.result_path)
+    reduce_data(args.data_path, ratio, max_frames, 'validation', args.result_path)
