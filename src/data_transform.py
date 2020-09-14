@@ -88,11 +88,13 @@ class ProcessImages(object):
     Args:
         input_shape: (shape_r, shape_c)
     """
-    def __init__(self, input_shape):
+    def __init__(self, input_shape, mean=[0, 0, 0], std=[1, 1, 1]):
         if isinstance(input_shape, numbers.Number):
             self.input_shape = (int(input_shape), int(input_shape))
         else:
             self.input_shape = input_shape
+        self.mean = mean
+        self.std = std
 
     def __call__(self, imgs):
         """
@@ -110,6 +112,9 @@ class ProcessImages(object):
         # normalize
         ims /= 255.0
         ims = np.rollaxis(ims, 3, 1)  # (t, c, h, w)
+        # standardize
+        for i in range(c):
+            ims[:, i] = (ims[:, i] - self.mean[i]) / self.std[i]
         return ims
 
     def __repr__(self):

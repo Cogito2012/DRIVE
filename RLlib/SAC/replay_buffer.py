@@ -39,16 +39,17 @@ class ReplayMemory:
 
 
 class ReplayMemoryGPU:
-    def __init__(self, cfg):
-        self.capacity = cfg.SAC.replay_size
-        self.device = cfg.device
-        self.dim_state = cfg.ENV.dim_state
-        self.dim_action = cfg.ENV.dim_action
-        self.dim_hidden = cfg.SAC.hidden_size
-        self.dim_labels = 5
+    def __init__(self, cfg, batchsize, device):
+        self.capacity = cfg.replay_size
+        self.batch_size = batchsize
+        self.device = device
+        self.dim_state = cfg.dim_state_fovea + cfg.dim_state_contex + cfg.dim_state_atten  # 188
+        self.dim_action = cfg.dim_action_accident + cfg.dim_action_attention  # 61
+        self.dim_hidden = cfg.hidden_size
+        # self.dim_labels = 5
         # determine the dimension of experience replay
         # (state, action, reward, next_state, rnn_state, labels, done)
-        self.dim_mem = self.dim_state + self.dim_action + 1 + self.dim_state + 2 * self.dim_hidden + self.dim_labels + 1
+        self.dim_mem = self.dim_state + self.dim_action + 1 + self.dim_state + 2 * self.dim_hidden + 1
         self.position, self.buffer = self.create_buffer()
         self.length = 0
 
@@ -57,29 +58,24 @@ class ReplayMemoryGPU:
         h = nvmlDeviceGetHandleByIndex(self.device.index)
         info = nvmlDeviceGetMemoryInfo(h)
         freeGPUMem = info.free * 1e-9  # with Gb unit
-        reqGPUMem = self.dim_mem * self.capacity * 4 * 1e-9 # 4 bytes per float32 element
+        reqGPUMem = self.dim_mem * self.batch_size * self.capacity * 4 * 1e-9 # 4 bytes per float32 element
         if freeGPUMem >= reqGPUMem + 1: # add an extra Gb requirement for memory safety
-            buffer = torch.from_numpy(np.empty((self.capacity, self.dim_mem), dtype=np.float32)).to(self.device)
+            buffer = torch.from_numpy(np.empty((self.capacity, self.batch_size, self.dim_mem), dtype=np.float32)).to(self.device)
             return 0, buffer
         else:
             print("At least %d GB GPU memory are requried!"%(reqGPUMem + 1))
             raise MemoryError
 
-    def push(self, state, action, reward, next_state, rnn_state, labels, done):
-        """ state: GPU(1, dim_state)
-            action: CPU(dim_action,)
-            reward: scalar
-            next_state: GPU(1, dim_state)
-            rnn_state: list with 2 items, for each: GPU(1, hidden_size)
-            labels: CPU(5,)
-            done: scalar
+    def push(self, state, actions, reward, next_state, rnn_state, done):
+        """ state: GPU(B, dim_state)
+            actions: GPU(B, dim_action)
+            reward: GPU(B, 1)
+            next_state: GPU(B, dim_state)
+            rnn_state: list with 2 items, for each: GPU(B, hidden_size)
+            done: GPU (B, 1)
         """
-        action_gpu = torch.FloatTensor(action).unsqueeze(0).to(self.device)
-        reward_gpu = torch.FloatTensor([[reward]]).to(self.device)
-        rnn_state_gpu = torch.cat(rnn_state, dim=-1)  # here we assume the batchsize must be 1!!
-        labels_gpu = torch.FloatTensor(labels).unsqueeze(0).to(self.device)
-        done_gpu = torch.FloatTensor([[done]]).to(self.device)
-        transition = torch.cat((state, action_gpu, reward_gpu, next_state, rnn_state_gpu, labels_gpu, done_gpu), dim=-1)
+        rnn_state_gpu = torch.cat(rnn_state, dim=-1)
+        transition = torch.cat((state, actions, reward, next_state, rnn_state_gpu, done), dim=-1)  # (B, 567)
         # insert the transition into buffer
         self.buffer[self.position] = transition
         self.position = (self.position + 1) % self.capacity
@@ -92,21 +88,26 @@ class ReplayMemoryGPU:
         indices = torch.LongTensor(indices).to(device)
         data_batch = torch.index_select(self.buffer, 0, indices)
         # parse the results
+        # state
         start, end = 0, self.dim_state
-        state = data_batch[:, start: end]
+        state = data_batch[:, :, start: end].view(-1, self.dim_state)
+        # action
         start, end = start + self.dim_state, end + self.dim_action
-        action = data_batch[:, start: end]
+        action = data_batch[:, :, start: end].view(-1, self.dim_action)
+        # reward
         start, end = start + self.dim_action, end + 1
-        reward = data_batch[:, start: end].unsqueeze(1)
+        reward = data_batch[:, :, start: end].view(-1, 1)
+        # next_state
         start, end = start + 1, end + self.dim_state
-        next_state = data_batch[:, start: end]
+        next_state = data_batch[:, :, start: end].view(-1, self.dim_state)
+        # rnn_state
         start, end = start + self.dim_state, end + 2 * self.dim_hidden
-        rnn_state = (data_batch[:, start: start + self.dim_hidden], data_batch[:, start + self.dim_hidden: end])
-        start, end = start + 2 * self.dim_hidden, end + self.dim_labels
-        labels = data_batch[:, start: end]
-        start, end = start + self.dim_labels, end + 1
-        mask = data_batch[:, start: end].unsqueeze(1)
-        return state, action, reward, next_state, rnn_state, labels, mask
+        rnn_state = (data_batch[:, :, start: start + self.dim_hidden].view(-1, self.dim_hidden), 
+                     data_batch[:, :, start + self.dim_hidden: end].view(-1, self.dim_hidden))
+        # done
+        start, end = start + 2 * self.dim_hidden, end + 1
+        mask = data_batch[:, :, start: end].view(-1, 1)
+        return state, action, reward, next_state, rnn_state, mask
 
     def __len__(self):
         return self.length

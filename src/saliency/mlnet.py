@@ -54,15 +54,15 @@ class ResNet_FPN(torch.nn.Module):
         p5 = self.top_layer(c5)    # (B, 256, 7, 7)
         # P4 block
         c4_lat = self.lat_layer1(c4)
-        p4 = F.upsample(p5, size=(c4_lat.size(2), c4_lat.size(3)), mode='bilinear') + c4_lat
+        p4 = F.interpolate(p5, size=(c4_lat.size(2), c4_lat.size(3)), mode='bilinear') + c4_lat
         p4 = self.smooth_layer1(p4)  # (B, 256, 14, 14)
         # P3 block
         c3_lat = self.lat_layer2(c3)
-        p3 = F.upsample(p4, size=(c3_lat.size(2), c3_lat.size(3)), mode='bilinear') + c3_lat
+        p3 = F.interpolate(p4, size=(c3_lat.size(2), c3_lat.size(3)), mode='bilinear') + c3_lat
         p3 = self.smooth_layer2(p3)  # (B, 256, 28, 28)
         # P2 block
         c2_lat = self.lat_layer3(c2)
-        p2 = F.upsample(p3, size=(c2_lat.size(2), c2_lat.size(3)), mode='bilinear') + c2_lat
+        p2 = F.interpolate(p3, size=(c2_lat.size(2), c2_lat.size(3)), mode='bilinear') + c2_lat
         p2 = self.smooth_layer3(p2)  # (B, 256, 56, 56)
         return p2
 
@@ -149,10 +149,10 @@ class MLNet(nn.Module):
 
         # dot product with prior
         x = x * upscaled_prior
-        x = torch.nn.functional.relu(x, inplace=True)
-
         if return_bottom:
             return x, bottom
+
+        x = torch.nn.functional.relu(x, inplace=True)
         return x
 
     

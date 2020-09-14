@@ -18,7 +18,9 @@ def weights_init_(m):
                 torch.nn.init.orthogonal_(param.data)
             else:
                 torch.nn.init.normal_(param.data)
-
+    if isinstance(m, nn.Conv2d):
+        torch.nn.init.xavier_uniform_(m.weight, gain=1)
+        torch.nn.init.constant_(m.bias, 0)
 
 class ValueNetwork(nn.Module):
     def __init__(self, num_inputs, hidden_dim):
@@ -238,3 +240,40 @@ class DeterministicPolicy(nn.Module):
         self.action_bias = self.action_bias.to(device)
         self.noise = self.noise.to(device)
         return super(DeterministicPolicy, self).to(device)
+
+
+class AttentionPolicy(nn.Module):
+    def __init__(self, dim_state_contex, dim_state_atten, dim_action_attention, hidden_dim, mask_size, sal_size):
+        super(AttentionPolicy, self).__init__()
+        self.mask_size = mask_size
+        self.sal_size = sal_size
+        assert self.mask_size[0] * self.mask_size[1] == dim_action_attention
+
+        self.linear1 = nn.Linear(dim_state_contex, hidden_dim)
+        self.linear2 = nn.Linear(hidden_dim, dim_state_atten)
+        self.conv1 = nn.Conv2d(1, 8, 3, stride=1)
+        self.conv2 = nn.Conv2d(8, 16, 3, stride=1)
+        self.conv3 = nn.Conv2d(16, 32, 3, stride=1)
+        self.conv4 = nn.Conv2d(32, 1, 1, stride=1)
+
+        self.apply(weights_init_)
+
+    def forward(self, contex, attention):
+        """contex: (B, 64)
+        attention: (B, 60)
+        """
+        # compute attention shift
+        x = F.relu(self.linear1(contex))
+        x = torch.tanh(self.linear2(x))
+        shift = x.view(-1, 1, self.mask_size[0], self.mask_size[1])
+        # attention shift
+        att = attention.view(-1, 1, self.mask_size[0], self.mask_size[1])
+        x = att + shift
+        x = F.interpolate(x, self.sal_size)
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+        x = F.interpolate(x, self.mask_size)
+        x = torch.sigmoid(self.conv4(x))  # (B, 1, 5, 12)
+        x = x.view(-1, self.mask_size[0] * self.mask_size[1])
+        return x

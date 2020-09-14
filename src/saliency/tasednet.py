@@ -5,7 +5,7 @@ class TASED_v2(nn.Module):
     def __init__(self, input_shape):
         super(TASED_v2, self).__init__()
         self.input_shape = input_shape
-        self.output_shape = input_shape
+        self.output_shape = [int(input_shape[0] / 8), int(input_shape[1] / 8)]
         self.base1 = nn.Sequential(
             SepConv3d(3, 64, kernel_size=7, stride=2, padding=3),
             nn.MaxPool3d(kernel_size=(1,3,3), stride=(1,2,2), padding=(0,1,1)),

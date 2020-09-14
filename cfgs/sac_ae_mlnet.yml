@@ -1,19 +1,15 @@
 ENV:
-  data_path: ./data/DADA-2000
-  batch_size: 1
-  image_shape: [660, 1584]
+  data_path: ./data/DADA-2000-small
+  batch_size: 4
+  image_shape: [330, 792]
   input_shape: [480, 640]
+  mask_shape: [5, 12]
   frame_interval: 5
   step_size: 1
   len_clip: 1
-  max_frames: 120    # 600/5, 20 seconds
-  binary_cls: true
   num_workers: 2
-  dim_state: 128
-  dim_action: 3
   score_thresh: 0.7
   use_salmap: false  # set to False to speedup data loading
-  use_foveation: true
   state_norm: true
   saliency: 'MLNet'
   env_model: ./models/saliency/mlnet_25.pth
@@ -23,6 +19,11 @@ SAC:
   lr: 0.0003
   num_classes: 2
   hidden_size: 64
+  dim_state_fovea: 64
+  dim_state_contex: 64
+  dim_state_atten: 60  # 5 x 12
+  dim_action_accident: 1
+  dim_action_attention: 60
   policy: "Gaussian"
   target_update_interval: 1000
   automatic_entropy_tuning: true
@@ -30,8 +31,8 @@ SAC:
   beta_actor: 0.01
   beta_fix: 1.0
   replay_size: 1000000
-  batch_size: 256
-  updates_per_step: 4
+  batch_size: 64
+  updates_per_step: 1
   logging_interval: 100
   weight_decay: 0.00001
   arch_type: "rae"  # mlp or rae

@@ -6,13 +6,14 @@ import datetime
 import random
 import yaml
 from easydict import EasyDict
+import time
 
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 # from prefetch_generator import BackgroundGenerator
 from torchvision import transforms
 
-from src.DADALoader import DADALoader
+from src.DADA2KS import DADA2KS
 from src.data_transform import ProcessImages, ProcessFixations
 from tqdm import tqdm
 import datetime
@@ -42,7 +43,7 @@ def parse_configs():
     args = parser.parse_args()
 
     with open(args.config, 'r') as f:
-        cfg = EasyDict(yaml.load(f))
+        cfg = EasyDict(yaml.safe_load(f))
     cfg.update(vars(args))
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     cfg.update(device=device)
@@ -57,33 +58,28 @@ def set_deterministic(seed):
     np.random.seed(seed)  # Numpy module.
     random.seed(seed)  # Python random module.
     torch.manual_seed(seed)
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = True
 
 
 def setup_dataloader(cfg, isTraining=True):
-    transform_dict = {'image': transforms.Compose([ProcessImages(cfg.input_shape)]),
+    transform_dict = {'image': transforms.Compose([ProcessImages(cfg.input_shape, mean=[0.218, 0.220, 0.209], std=[0.277, 0.280, 0.277])]),
                       'focus': transforms.Compose([ProcessImages(cfg.output_shape)]), 
                       'fixpt': transforms.Compose([ProcessFixations(cfg.input_shape, cfg.image_shape)])}
-    params_norm = {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}
-
     # testing dataset
     if not isTraining:
-        test_data = DADALoader(cfg.data_path, 'testing', interval=cfg.frame_interval, max_frames=-1, 
-                                transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_focus=cfg.use_salmap)
-        testdata_loader = DataLoader(dataset=test_data, batch_size=1, shuffle=False, num_workers=0, pin_memory=True)
+        test_data = DADA2KS(cfg.data_path, 'testing', interval=cfg.frame_interval, transforms=transform_dict, use_focus=cfg.use_salmap)
+        testdata_loader = DataLoader(dataset=test_data, batch_size=1, shuffle=False, drop_last=True, num_workers=0, pin_memory=True)
         print("# test set: %d"%(len(test_data)))
         return testdata_loader
 
     # training dataset
-    train_data = DADALoader(cfg.data_path, 'training', interval=cfg.frame_interval, max_frames=cfg.max_frames, 
-                            transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_focus=cfg.use_salmap)
-    traindata_loader = DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, pin_memory=True)
+    train_data = DADA2KS(cfg.data_path, 'training', interval=cfg.frame_interval, transforms=transform_dict, use_focus=cfg.use_salmap)
+    traindata_loader = DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, drop_last=True, num_workers=cfg.num_workers, pin_memory=True)
 
     # validataion dataset
-    eval_data = DADALoader(cfg.data_path, 'validation', interval=cfg.frame_interval, max_frames=cfg.max_frames, 
-                            transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_focus=cfg.use_salmap)
-    evaldata_loader = DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers, pin_memory=True)
+    eval_data = DADA2KS(cfg.data_path, 'validation', interval=cfg.frame_interval, transforms=transform_dict, use_focus=cfg.use_salmap)
+    evaldata_loader = DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, drop_last=True, num_workers=cfg.num_workers, pin_memory=True)
     print("# train set: %d, eval set: %d"%(len(train_data), len(eval_data)))
 
     return traindata_loader, evaldata_loader
@@ -104,20 +100,19 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
     for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), 
                                                                                      desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         # set environment data
-        state = env.set_data(video_data, coord_data)
-        episode_reward = 0
-        episode_steps = 0
-        done = False
+        state = env.set_data(video_data, coord_data, data_info)
+
+        episode_reward = torch.tensor(0.0).to(cfg.device)
+        done = torch.ones((cfg.ENV.batch_size, 1), dtype=torch.float32).to(cfg.device)
         rnn_state = (torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device),
                      torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device))
-
-        while not done:
+        episode_steps = 0
+        while episode_steps < env.max_steps:
             # select action
-            action, rnn_state = agent.select_action(state, rnn_state)
+            actions, rnn_state = agent.select_action(state, rnn_state)
 
             # Update parameters of all the networks
             if len(memory) > cfg.SAC.batch_size:
-                # Number of updates per step in environment
                 for _ in range(cfg.SAC.updates_per_step):
                     outputs = agent.update_parameters(memory, updates)
                     if updates % cfg.SAC.logging_interval == 0:
@@ -126,23 +121,19 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
                     updates += 1
 
             # step to next state
-            next_state, reward, done, info = env.step(action) # Step
+            next_state, rewards = env.step(actions) # Step
             episode_steps += 1
-            episode_reward += reward
+            episode_reward += rewards.sum()
 
             # push the current step into memory
-            mask = 1 if episode_steps == env.max_step else float(not done)
-            cur_time = (env.cur_step-1) * env.step_size / env.fps
-            gt_fix_next = info['gt_fixation']
-            labels = np.array([cur_time, env.clsID, env.begin_accident, gt_fix_next[0], gt_fix_next[1]], dtype=np.float32)
-            memory.push(state, action, reward, next_state, rnn_state, labels, mask) # Append transition to memory
-
+            mask = done if episode_steps == env.max_steps else done - 1.0
+            memory.push(state, actions, rewards, next_state, rnn_state, mask) # Append transition to memory
             # shift to next state
             state = next_state.clone()
 
-        reward_total += episode_reward
+        reward_total += episode_reward.cpu().numpy()
     writer.add_scalar('reward/train_per_epoch', reward_total, epoch)
-
+    
     return updates
 
 
@@ -152,21 +143,20 @@ def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
     for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), 
                                                                                     desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         # set environment data
-        state = env.set_data(video_data, coord_data)
+        state = env.set_data(video_data, coord_data, data_info)
         rnn_state = (torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device),
                      torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device))
-        episode_reward = 0
+        episode_reward = torch.tensor(0.0).to(cfg.device)
         episode_steps = 0
-        done = False
-        while not done:
+        while episode_steps < env.max_steps:
             # select action
-            action, rnn_state = agent.select_action(state, rnn_state, evaluate=True)
+            actions, rnn_state = agent.select_action(state, rnn_state, evaluate=True)
             # step
-            state, reward, done, info = env.step(action)
-            episode_reward += reward
+            state, reward = env.step(actions)
+            episode_reward += reward.sum()
             episode_steps += 1
 
-        total_reward += episode_reward
+        total_reward += episode_reward.cpu().numpy()
     writer.add_scalar('reward/test_per_epoch', total_reward, epoch)
 
 
@@ -191,10 +181,10 @@ def train():
     traindata_loader, evaldata_loader = setup_dataloader(cfg.ENV)
 
     # AgentENV
-    agent = SAC(env.dim_state, env.dim_action, cfg.SAC, device=cfg.device)
+    agent = SAC(env.mask_size, env.output_shape, cfg.SAC, device=cfg.device)
 
     # Memory
-    memory = ReplayMemory(cfg.SAC.replay_size) if not cfg.SAC.gpu_replay else ReplayMemoryGPU(cfg)
+    memory = ReplayMemory(cfg.SAC.replay_size) if not cfg.SAC.gpu_replay else ReplayMemoryGPU(cfg.SAC, cfg.ENV.batch_size, device=cfg.device)
 
     updates = 0
     for e in range(cfg.num_epoch):
@@ -234,7 +224,7 @@ def test():
         testdata_loader = setup_dataloader(cfg.ENV, isTraining=False)
 
         # AgentENV
-        agent = SAC(env.dim_state, env.dim_action, cfg.SAC, device=cfg.device)
+        agent = SAC(env.mask_size, env.output_shape, cfg.SAC, device=cfg.device)
 
         # load agent models (by default: the last epoch)
         ckpt_dir = os.path.join(cfg.output, 'checkpoints')
