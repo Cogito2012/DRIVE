@@ -284,7 +284,7 @@ class DashCamEnv(core.Env):
         else:
             # The last step
             next_state = self.cur_state.clone()  # GPU array
-            cur_rewards = torch.zeros([batch_size, 1], dtype=torch.float32).to(self.device)
+            cur_rewards = torch.zeros([batch_size, 1], dtype=torch.float32).to(self.device) if isTraining else 0
 
         self.cur_step += 1
         self.cur_state = next_state.clone()

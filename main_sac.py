@@ -69,7 +69,7 @@ def setup_dataloader(cfg, isTraining=True):
     # testing dataset
     if not isTraining:
         test_data = DADA2KS(cfg.data_path, 'testing', interval=cfg.frame_interval, transforms=transform_dict, use_focus=cfg.use_salmap)
-        testdata_loader = DataLoader(dataset=test_data, batch_size=1, shuffle=False, drop_last=True, num_workers=0, pin_memory=True)
+        testdata_loader = DataLoader(dataset=test_data, batch_size=cfg.batch_size, shuffle=False, drop_last=True, num_workers=0, pin_memory=True)
         print("# test set: %d"%(len(test_data)))
         return testdata_loader
 
@@ -204,16 +204,62 @@ def train():
     env.close()
     
 
+def test_all(testdata_loader, env, agent):
+    all_pred_scores, all_gt_labels, all_pred_masks, all_gt_masks, all_toas, all_vids = [], [], [], [], [], []
+    for i, (video_data, _, coord_data, data_info) in enumerate(testdata_loader):  # (B, T, H, W, C)
+        print("Testing video %d/%d, file: %d/%d.avi, frame #: %d (fps=%.2f)."
+            %(i+1, len(testdata_loader), data_info[0, 0], data_info[0, 1], video_data.size(1), 30/cfg.ENV.frame_interval))
+        # set environment data
+        state = env.set_data(video_data, coord_data, data_info)
+
+        # init vars before each episode
+        pred_scores, pred_masks, gt_masks = [], [], []
+        rnn_state = (torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device),
+                        torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device))
+        score_pred = np.zeros((cfg.ENV.batch_size, env.max_steps), dtype=np.float32)
+        mask_pred = np.zeros((cfg.ENV.batch_size, env.max_steps, env.mask_size[0], env.mask_size[1]), dtype=np.float32)
+        mask_gt = np.zeros_like(mask_pred, dtype=np.float32)
+        i_steps = 0
+        while i_steps < env.max_steps:
+            # select action
+            actions, rnn_state = agent.select_action(state, rnn_state, evaluate=True)
+
+            # gather actions
+            score_pred[:, i_steps] = 0.5 * (actions[:, 0].cpu().numpy() + 1.0)  # map to [0, 1], shape=(B,)
+            mask_pred[:, i_steps] = actions[:, 1:].view(-1, env.mask_size[0], env.mask_size[1]).cpu().numpy()  # shape=(B, 1, 5, 12)
+            mask_gt[:, i_steps] = env.mask_data[:, (env.cur_step + 1)*env.step_size, :, :].cpu().numpy()
+
+            # step
+            state, reward = env.step(actions, isTraining=False)
+            i_steps += 1
+
+        # save results
+        all_pred_scores.append(score_pred)  # (B, T)
+        all_gt_labels.append(env.clsID.cpu().numpy())  # (B,)
+        all_pred_masks.append(mask_pred)  # (B, T, 5, 12)
+        all_gt_masks.append(mask_gt)      # (B, T, 5, 12)
+        all_toas.append(env.begin_accident.cpu().numpy())  # (B,)
+        all_vids.append(data_info[:,:2].numpy())
+    
+    all_pred_scores = np.concatenate(all_pred_scores)
+    all_gt_labels = np.concatenate(all_gt_labels)
+    all_pred_masks = np.concatenate(all_pred_masks)
+    all_gt_masks = np.concatenate(all_gt_masks)
+    all_toas = np.concatenate(all_toas)
+    all_vids = np.concatenate(all_vids)
+    return all_pred_scores, all_gt_labels, all_pred_masks, all_gt_masks, all_toas, all_vids
+
 def test():
     # prepare output directory
     output_dir = os.path.join(cfg.output, 'eval')
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     
-    result_file = os.path.join(output_dir, 'results.npy')
+    result_file = os.path.join(output_dir, 'results.npz')
     if os.path.exists(result_file):
         save_dict = np.load(result_file, allow_pickle=True)
-        save_dict = save_dict.item()
+        all_pred_scores, all_gt_labels, all_pred_masks, all_gt_masks, all_toas, all_vids = \
+            save_dict['pred_scores'], save_dict['gt_labels'], save_dict['pred_masks'], save_dict['gt_masks'], save_dict['toas'], save_dict['vids']
     else:
         # initilize environment
         env = DashCamEnv(cfg.ENV, device=cfg.device)
@@ -232,53 +278,15 @@ def test():
 
         # start to test 
         agent.set_status('eval')
-        save_dict = {'score_preds': [], 'fix_preds': [], 'gt_labels': [], 'gt_fixes': [], 'toas': [], 'vids': []}
-        for i, (video_data, _, coord_data, data_info) in enumerate(testdata_loader):  # (B, T, H, W, C)
-            print("Testing video %d/%d, file: %d/%d.avi, frame #: %d (fps=%.2f)."
-                %(i+1, len(testdata_loader), data_info[0, 0], data_info[0, 1], video_data.size(1), 30/cfg.ENV.frame_interval))
-            # set environment data
-            state = env.set_data(video_data, coord_data)
-
-            # init vars before each episode
-            rnn_state = (torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device),
-                         torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device))
-            done = False
-            pred_scores, pred_fixes, gt_fixes = [], [], []
-            while not done:
-                # select action
-                action, rnn_state = agent.select_action(state, rnn_state, evaluate=True)
-                next_fixation = env.scales_to_point(action[:2])
-                pred_fixes.append(next_fixation)
-                # gather ground truth of next fixation
-                gt_fixes.append(env.coord_data[(env.cur_step + 1) * env.step_size, :2])
-                score = 0.5 * (action[2] + 1.0)
-                pred_scores.append(score)
-
-                # step
-                state, reward, done, _ = env.step(action)
-                
-            gt_fixes = np.vstack(gt_fixes)
-            # save results
-            save_dict['score_preds'].append(np.array(pred_scores, dtype=np.float32))
-            save_dict['fix_preds'].append(np.array(pred_fixes, dtype=np.float32))
-            save_dict['gt_labels'].append(env.clsID)
-            save_dict['gt_fixes'].append(gt_fixes)
-            save_dict['toas'].append(env.begin_accident)
-            save_dict['vids'].append(data_info[:,:2].numpy())
-            
-        np.save(result_file, save_dict)
+        with torch.no_grad():
+            all_pred_scores, all_gt_labels, all_pred_masks, all_gt_masks, all_toas, all_vids = test_all(testdata_loader, env, agent)
+        np.savez(result_file[:-4], pred_scores=all_pred_scores, gt_labels=all_gt_labels, pred_masks=all_pred_masks, gt_masks=all_gt_masks, toas=all_toas, vids=all_vids)
 
     # evaluate the results
-    score_preds = save_dict['score_preds']
-    gt_labels = save_dict['gt_labels']
-    toas = save_dict['toas']
-    all_fps = [30/cfg.ENV.frame_interval] * len(gt_labels)
-    vis_file = os.path.join(output_dir, 'PRCurve_SAC.png')
-    AP, mTTA, TTA_R80 = evaluation_accident(score_preds, gt_labels, toas, all_fps, draw_curves=True, vis_file=vis_file)
-    # print
+    AP, mTTA, TTA_R80, p05, r05, t05 = evaluation_accident(all_pred_scores, all_gt_labels, all_toas, fps=30/cfg.ENV.frame_interval)
     print("AP = %.4f, mean TTA = %.4f, TTA@0.8 = %.4f"%(AP, mTTA, TTA_R80))
-    mse_fix = evaluation_fixation(save_dict['fix_preds'], save_dict['gt_fixes'])
-    print('Fixation Prediction MSE=%.4f'%(mse_fix))
+    print("\nprecision@0.5 = %.4f, recall@0.5 = %.4f, TTA@0.5 = %.4f\n"%(p05, r05, t05))
+    
 
 
 if __name__ == "__main__":
@@ -292,7 +300,6 @@ if __name__ == "__main__":
     if cfg.phase == 'train':
         train()
     elif cfg.phase == 'test':
-        with torch.no_grad():
-            test()
+        test()
     else:
         raise NotImplementedError
