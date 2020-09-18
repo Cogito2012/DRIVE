@@ -279,12 +279,14 @@ def test():
         np.save(result_file, save_dict)
 
     # evaluate the results
+    fps = 30/cfg.ENV.frame_interval
     score_preds = save_dict['score_preds']
     gt_labels = save_dict['gt_labels']
-    toas = save_dict['toas']
-    all_fps = [30/cfg.ENV.frame_interval] * len(gt_labels)
-    vis_file = os.path.join(output_dir, 'PRCurve_SAC.png')
-    AP, mTTA, TTA_R80 = evaluation_accident(score_preds, gt_labels, toas, all_fps, draw_curves=True, vis_file=vis_file)
+    toas = [t * fps for t in save_dict['toas']]
+    AP, mTTA, TTA_R80, p05, r05, t05 = evaluation_accident(score_preds, gt_labels, toas, fps=fps)
+    print("AP = %.4f, mean TTA = %.4f, TTA@0.8 = %.4f"%(AP, mTTA, TTA_R80))
+    print("\nprecision@0.5 = %.4f, recall@0.5 = %.4f, TTA@0.5 = %.4f\n"%(p05, r05, t05))
+
     # print
     print("AP = %.4f, mean TTA = %.4f, TTA@0.8 = %.4f"%(AP, mTTA, TTA_R80))
     mse_fix = evaluation_fixation(save_dict['fix_preds'], save_dict['gt_fixes'])
