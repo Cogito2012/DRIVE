@@ -7,7 +7,7 @@ ENV:
   frame_interval: 5
   step_size: 1
   len_clip: 1
-  num_workers: 2
+  num_workers: 4
   score_thresh: 0.7
   use_salmap: false  # set to False to speedup data loading
   state_norm: true
