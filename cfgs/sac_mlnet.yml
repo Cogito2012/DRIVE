@@ -33,7 +33,7 @@ SAC:
   beta_fix: 1.0
   replay_size: 1000000
   batch_size: 64
-  updates_per_step: 2
+  updates_per_step: 1
   logging_interval: 100
   weight_decay: 0.00001
   arch_type: "mlp"  # mlp or rae
