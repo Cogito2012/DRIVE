@@ -116,10 +116,11 @@ class QNetwork(nn.Module):
         return x1, x2
 
 
-class GaussianPolicy(nn.Module):
-    def __init__(self, num_inputs, num_actions, hidden_dim, action_space=None, dim_latent=None, arch_type='mlp'):
-        super(GaussianPolicy, self).__init__()
+class AccidentPolicy(nn.Module):
+    def __init__(self, num_inputs, num_actions, hidden_dim, action_space=None, dim_latent=None, arch_type='mlp', policy_type='Gaussian'):
+        super(AccidentPolicy, self).__init__()
         self.arch_type = arch_type
+        self.policy_type = policy_type
         self.dim_latent = dim_latent
         if arch_type == 'rae':
             self.state_encoder = StateEncoder(num_inputs, dim_latent)
@@ -131,8 +132,12 @@ class GaussianPolicy(nn.Module):
         self.linear2 = nn.Linear(hidden_dim, hidden_dim)
         self.lstm_cell = nn.LSTMCell(hidden_dim, hidden_dim)
 
+
         self.mean_linear = nn.Linear(hidden_dim, num_actions)
-        self.log_std_linear = nn.Linear(hidden_dim, num_actions)
+        if self.policy_type == 'Gaussian':
+            self.log_std_linear = nn.Linear(hidden_dim, num_actions)
+        else:
+            self.noise = torch.Tensor(num_actions)
 
         self.apply(weights_init_)
 
@@ -159,98 +164,58 @@ class GaussianPolicy(nn.Module):
             rnn_state_new = self.lstm_cell(x, rnn_state)
             x = rnn_state_new[0].clone()  # fetch hidden states as x
         mean = self.mean_linear(x)
-        log_std = self.log_std_linear(x)
-        log_std = torch.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
+        if self.policy_type == 'Gaussian':
+            log_std = self.log_std_linear(x)
+            log_std = torch.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
+        else:
+            mean = torch.tanh(mean) * self.action_scale + self.action_bias
+            log_std = torch.tensor(0.0).to(mean.device)
         return mean, log_std, rnn_state_new
 
 
     def sample(self, state, rnn_state=None, detach=False):
         mean, log_std, rnn_state = self.forward(state, rnn_state, detach=detach)
-        std = log_std.exp()
-        normal = Normal(mean, std)
-        x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1))
-        y_t = torch.tanh(x_t)
-        action = y_t * self.action_scale + self.action_bias
-        log_prob = normal.log_prob(x_t)
-        # Enforcing Action Bound
-        log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + epsilon)
-        log_prob = log_prob.sum(1, keepdim=True)
-        mean = torch.tanh(mean) * self.action_scale + self.action_bias
+        if self.policy_type == 'Gaussian':
+            std = log_std.exp()
+            normal = Normal(mean, std)
+            x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1))
+            y_t = torch.tanh(x_t)
+            action = y_t * self.action_scale + self.action_bias
+            log_prob = normal.log_prob(x_t)
+            # Enforcing Action Bound
+            log_prob -= torch.log(self.action_scale * (1 - y_t.pow(2)) + epsilon)
+            log_prob = log_prob.sum(1, keepdim=True)
+            mean = torch.tanh(mean) * self.action_scale + self.action_bias
+        else:
+            noise = self.noise.normal_(0., std=0.1)
+            noise = noise.clamp(-0.25, 0.25)
+            action = mean + noise
+            log_prob = torch.tensor(0.0).to(action.device)
         return action, rnn_state, log_prob, mean
 
     def to(self, device):
         self.action_scale = self.action_scale.to(device)
         self.action_bias = self.action_bias.to(device)
-        return super(GaussianPolicy, self).to(device)
-
-
-class DeterministicPolicy(nn.Module):
-    def __init__(self, num_inputs, num_actions, hidden_dim, action_space=None, dim_latent=None, arch_type='mlp'):
-        super(DeterministicPolicy, self).__init__()
-        self.arch_type = arch_type
-        self.dim_latent = dim_latent
-        if arch_type == 'rae':
-            self.state_encoder = StateEncoder(num_inputs, dim_latent)
-            self.num_inputs = dim_latent
-        else:
-            self.num_inputs = num_inputs
-        
-        self.linear1 = nn.Linear(self.num_inputs, hidden_dim)
-        self.linear2 = nn.Linear(hidden_dim, hidden_dim)
-        self.lstm_cell = nn.LSTMCell(hidden_dim, hidden_dim)
-
-        self.mean = nn.Linear(hidden_dim, num_actions)
-        self.noise = torch.Tensor(num_actions)
-
-        self.apply(weights_init_)
-
-        # action rescaling
-        if action_space is None:
-            self.action_scale = torch.tensor(1.)
-            self.action_bias = torch.tensor(0.)
-        else:
-            self.action_scale = torch.FloatTensor(
-                (action_space.high - action_space.low) / 2.)
-            self.action_bias = torch.FloatTensor(
-                (action_space.high + action_space.low) / 2.)
-
-    def forward(self, state, rnn_state=None, detach=False):
-        if self.arch_type == 'rae':
-            x = self.state_encoder(state, detach=detach)
-        else:
-            x = state.clone()
-        x = F.relu(self.linear1(x))
-        x = F.relu(self.linear2(x))
-        rnn_state_new = None
-        if rnn_state is not None:
-            rnn_state_new = self.lstm_cell(x, rnn_state)
-            x = rnn_state_new[0].clone()  # fetch hidden states as x
-        mean = torch.tanh(self.mean(x)) * self.action_scale + self.action_bias
-        return mean, rnn_state_new
-
-    def sample(self, state, rnn_state=None, detach=False):
-        mean, rnn_state = self.forward(state, rnn_state, detach=detach)
-        noise = self.noise.normal_(0., std=0.1)
-        noise = noise.clamp(-0.25, 0.25)
-        action = mean + noise
-        return action, rnn_state, torch.tensor(0.), mean
-
-    def to(self, device):
-        self.action_scale = self.action_scale.to(device)
-        self.action_bias = self.action_bias.to(device)
-        self.noise = self.noise.to(device)
-        return super(DeterministicPolicy, self).to(device)
+        if not self.policy_type == 'Gaussian':
+            self.noise = self.noise.to(device)
+        return super(AccidentPolicy, self).to(device)
 
 
 class AttentionPolicy(nn.Module):
-    def __init__(self, dim_state_contex, dim_state_atten, dim_action_attention, hidden_dim, mask_size, sal_size):
+    def __init__(self, dim_state_contex, dim_state_atten, dim_action_attention, hidden_dim, mask_size, sal_size, policy_type='Gaussian'):
         super(AttentionPolicy, self).__init__()
         self.mask_size = mask_size
         self.sal_size = sal_size
+        self.policy_type = policy_type
         assert self.mask_size[0] * self.mask_size[1] == dim_action_attention
 
         self.linear1 = nn.Linear(dim_state_contex, hidden_dim)
-        self.linear2 = nn.Linear(hidden_dim, dim_state_atten)
+        self.linear2 = nn.Linear(hidden_dim, hidden_dim)
+        self.mean_linear = nn.Linear(hidden_dim, dim_action_attention)
+        if self.policy_type == 'Gaussian':
+            self.log_std_linear = nn.Linear(hidden_dim, dim_action_attention)
+        else:
+            self.noise = torch.Tensor(dim_action_attention)
         self.conv1 = nn.Conv2d(1, 8, 3, stride=1)
         self.conv2 = nn.Conv2d(8, 16, 3, stride=1)
         self.conv3 = nn.Conv2d(16, 32, 3, stride=1)
@@ -264,11 +229,20 @@ class AttentionPolicy(nn.Module):
         """
         # compute attention shift
         x = F.relu(self.linear1(contex))
-        x = torch.tanh(self.linear2(x))
-        shift = x.view(-1, 1, self.mask_size[0], self.mask_size[1])
-        # attention shift
-        att = attention.view(-1, 1, self.mask_size[0], self.mask_size[1])
-        x = att + shift
+        x = F.relu(self.linear2(x))
+        mean = self.mean_linear(x)
+        if self.policy_type == 'Gaussian':
+            log_std = self.log_std_linear(x)
+            log_std = torch.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
+        else:
+            mean = torch.tanh(mean)
+            log_std = torch.tensor(0.0).to(mean.device)
+        return mean, log_std
+
+    def attention_shift(self, attention, shift):
+        att_reshape = attention.view(-1, 1, self.mask_size[0], self.mask_size[1])
+        shift_respahe = shift.view(-1, 1, self.mask_size[0], self.mask_size[1])
+        x = att_reshape + shift_respahe
         x = F.interpolate(x, self.sal_size)
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
@@ -277,3 +251,34 @@ class AttentionPolicy(nn.Module):
         x = torch.sigmoid(self.conv4(x))  # (B, 1, 5, 12)
         x = x.view(-1, self.mask_size[0] * self.mask_size[1])
         return x
+
+
+    def sample(self, contex, attention):
+        mean, log_std = self.forward(contex, attention)
+        if self.policy_type == 'Gaussian':
+            std = log_std.exp()
+            normal = Normal(mean, std)
+            x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1))
+            y_t = torch.tanh(x_t)
+            action_shift = y_t.clone()
+            log_prob = normal.log_prob(x_t)
+            # Enforcing Action Bound
+            log_prob -= torch.log(1 - y_t.pow(2) + epsilon)
+            log_prob = log_prob.sum(1, keepdim=True)
+            mean = torch.tanh(mean)
+        else:
+            noise = self.noise.normal_(0., std=0.1)
+            noise = noise.clamp(-0.25, 0.25)
+            action_shift = mean + noise
+            log_prob = torch.tensor(0.0).to(action_shift.device)
+        
+        # attention shift
+        action = self.attention_shift(attention, action_shift)
+        mean = self.attention_shift(attention, mean)
+        return action, log_prob, mean
+        
+
+    def to(self, device):
+        if not self.policy_type == 'Gaussian':
+            self.noise = self.noise.to(device)
+        return super(AttentionPolicy, self).to(device)

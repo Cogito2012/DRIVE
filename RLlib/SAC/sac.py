@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.optim import Adam
 # from torch.nn.utils import clip_grad_norm_
 from .utils import soft_update, hard_update
-from .agents import GaussianPolicy, QNetwork, DeterministicPolicy, StateDecoder, AttentionPolicy
+from .agents import AccidentPolicy, QNetwork, StateDecoder, AttentionPolicy
 import time
 
 
@@ -20,7 +20,8 @@ class SAC(object):
         self.beta_fix = cfg.beta_fix
 
         self.arch_type = cfg.arch_type
-        self.policy_type = cfg.policy
+        self.policy_accid = cfg.policy_accid
+        self.policy_atten = cfg.policy_atten
         self.target_update_interval = cfg.target_update_interval
         self.automatic_entropy_tuning = cfg.automatic_entropy_tuning
         self.num_classes = cfg.num_classes
@@ -58,9 +59,18 @@ class SAC(object):
             self.decoder_optim = Adam(self.decoder.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
             self.latent_lambda = cfg.latent_lambda
         
-        if self.policy_type == "Gaussian" and self.automatic_entropy_tuning:
+        if self.automatic_entropy_tuning:
             # Target Entropy = −dim(A) (e.g. , -6 for HalfCheetah-v2) as given in the paper
-            self.target_entropy = -torch.prod(torch.Tensor((self.dim_action)).to(self.device)).item()
+            if self.policy_accid == "Gaussian" and not self.policy_atten == 'Gaussian':
+                dim_entropy = self.dim_action_accident
+            elif not self.policy_accid == "Gaussian" and self.policy_atten == 'Gaussian':
+                dim_entropy = self.dim_action_attention
+            elif self.policy_accid == "Gaussian" and self.policy_atten == 'Gaussian':
+                dim_entropy = self.dim_action
+            else:
+                print("When automatic entropy, at least one policy is Gaussian!")
+                raise ValueError
+            self.target_entropy = -torch.prod(torch.Tensor((dim_entropy)).to(self.device)).item()
             self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
             self.alpha_optim = Adam([self.log_alpha], lr=cfg.lr)
         else:
@@ -77,12 +87,11 @@ class SAC(object):
         critic = QNetwork(self.dim_state, self.dim_action, cfg.hidden_size, dim_latent=cfg.dim_latent, arch_type=cfg.arch_type).to(device=self.device)
         critic_target = QNetwork(self.dim_state, self.dim_action, cfg.hidden_size, dim_latent=cfg.dim_latent, arch_type=cfg.arch_type).to(self.device)
         # create accident anticipation policy
-        if self.policy_type == "Gaussian":
-            policy_accident = GaussianPolicy(self.dim_state_fovea, self.dim_action_accident, cfg.hidden_size, dim_latent=cfg.dim_latent, arch_type=cfg.arch_type).to(self.device)
-        else:
-            policy = DeterministicPolicy(self.dim_state_fovea, self.dim_action_accident, cfg.hidden_size, dim_latent=cfg.dim_latent, arch_type=cfg.arch_type).to(self.device)
+        policy_accident = AccidentPolicy(self.dim_state_fovea, self.dim_action_accident, cfg.hidden_size, 
+            dim_latent=cfg.dim_latent, arch_type=cfg.arch_type, policy_type=self.policy_accid).to(self.device)
         # create attention mask prediction policy
-        policy_attention = AttentionPolicy(self.dim_state_contex, self.dim_state_atten, self.dim_action_attention, cfg.hidden_size, self.mask_size, self.sal_size).to(self.device)
+        policy_attention = AttentionPolicy(self.dim_state_contex, self.dim_state_atten, self.dim_action_attention, 
+            cfg.hidden_size, self.mask_size, self.sal_size, policy_type=self.policy_atten).to(self.device)
         return policy_accident, policy_attention, critic, critic_target
 
     
@@ -105,9 +114,10 @@ class SAC(object):
         # execute actions
         if evaluate is False:
             action_acc, rnn_state, _, _ = self.policy_accident.sample(foveal_state, rnn_state)
+            action_att, _, _ = self.policy_attention.sample(contex_state, mask_state)
         else:
             _, rnn_state, _, action_acc = self.policy_accident.sample(foveal_state, rnn_state)
-        action_att = self.policy_attention.forward(contex_state, mask_state)
+            _, _, action_att = self.policy_attention.sample(contex_state, mask_state)
         # get actions
         actions = torch.cat([action_acc.detach(), action_att.detach()], dim=1)
         if rnn_state is not None:
@@ -122,12 +132,12 @@ class SAC(object):
             next_contex_state = next_state_batch[:, self.dim_state_fovea: self.dim_state_fovea + self.dim_state_contex]
             next_mask_state = next_state_batch[:, self.dim_state_fovea + self.dim_state_contex:]
             # inference two policies
-            next_accid_state_action, _, next_state_log_pi, _ = self.policy_accident.sample(next_fovea_state, rnn_state_batch)
-            next_atten_state_action = self.policy_attention.forward(next_contex_state, next_mask_state)
+            next_accid_state_action, _, next_accid_state_log_pi, _ = self.policy_accident.sample(next_fovea_state, rnn_state_batch)
+            next_atten_state_action, next_atten_state_log_pi, _ = self.policy_attention.sample(next_contex_state, next_mask_state)
             next_state_action = torch.cat([next_accid_state_action, next_atten_state_action], dim=1)
             # interence critics
             qf1_next_target, qf2_next_target = self.critic_target(next_state_batch, next_state_action)
-            min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - self.alpha * next_state_log_pi
+            min_qf_next_target = torch.min(qf1_next_target, qf2_next_target) - self.alpha * (next_accid_state_log_pi + next_atten_state_log_pi)
             next_q_value = reward_batch + (1 - mask_batch) * self.gamma * (min_qf_next_target)
         qf1, qf2 = self.critic(state_batch, action_batch)  # Two Q-functions to mitigate positive bias in the policy improvement step
         qf1_loss = F.mse_loss(qf1, next_q_value)  # JQ = 𝔼(st,at)~D[0.5(Q1(st,at) - r(st,at) - γ(𝔼st+1~p[V(st+1)]))^2]
@@ -147,9 +157,10 @@ class SAC(object):
         mask_state = state_batch[:, self.dim_state_fovea + self.dim_state_contex:]
 
         # sampling
-        pi, _, log_pi, mean_action = self.policy_accident.sample(fovea_state, rnn_state_batch, detach=True)
-        atten_state_action = self.policy_attention.forward(contex_state, mask_state)
-        pi = torch.cat([pi, atten_state_action], dim=1)
+        pi_accid, _, log_pi_accid, mean_accid = self.policy_accident.sample(fovea_state, rnn_state_batch, detach=True)
+        pi_atten, log_pi_atten, mean_atten = self.policy_attention.sample(contex_state, mask_state)
+        pi = torch.cat([pi_accid, pi_atten], dim=1)
+        log_pi = log_pi_accid + log_pi_atten
 
         qf1_pi, qf2_pi = self.critic(state_batch, pi, detach=True)
         min_qf_pi = torch.min(qf1_pi, qf2_pi)
