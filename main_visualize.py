@@ -91,12 +91,14 @@ if __name__ == "__main__":
             continue    
         if len(visits) > 19:
             break
-        visits.append(vidname)
         pred_scores = all_pred_scores[i]
         gt_labels = all_gt_labels[i]
         pred_masks = all_pred_masks[i]
         gt_masks = all_gt_masks[i]
         toa = int(all_toas[i] * 30)
+        if not gt_labels > 0:
+            continue
+        visits.append(vidname)
 
         print("accident ID=%d, video ID=%d"%(accid, vid))
         
