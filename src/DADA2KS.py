@@ -69,7 +69,7 @@ class DADA2KS(Dataset):
             toa = int((self.toas[index] - start) / self.interval)
         else:
             toa = int(self.toas[index])  # negative sample (toa=-1)
-        data_info = np.array([accident_id, video_id, self.labels[index], toa], dtype=np.int32)
+        data_info = np.array([accident_id, video_id, start, end, self.labels[index], toa], dtype=np.int32)
         return data_info
 
     def read_coord_arrays(self, coord_file, start, end):

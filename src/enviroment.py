@@ -62,7 +62,7 @@ class DashCamEnv(core.Env):
     def set_data(self, video_data, coord_data, data_info):
         """ video data: (B, T, C, H, W)
             coord_data: (B, T, 2), (x, y)
-            data_info: (B, 4), (accID, vid, label, toa)
+            data_info: (B, 6), (accID, vid, clip_start, clip_end, label, toa)
         """ 
         # the following attributes are unchanged or ground truth of environment for an entire video
         self.video_data = video_data.float().to(self.device, non_blocking=True)  # (B, T, 3, H, W)
@@ -79,8 +79,8 @@ class DashCamEnv(core.Env):
         # maximum number of steps
         self.max_steps = (self.video_data.size(1) - self.len_clip + 1) // self.step_size
         # neg/pos labels
-        self.clsID = data_info[:, 2].to(self.device)
-        self.begin_accident = data_info[:, 3].to(self.device) / float(self.fps)  # time-of-accident (seconds), for neg: toa=-1
+        self.clsID = data_info[:, 4].to(self.device)
+        self.begin_accident = data_info[:, 5].to(self.device) / float(self.fps)  # time-of-accident (seconds), for neg: toa=-1
         # reset the agent to the initial states
         state = self.reset()
         return state

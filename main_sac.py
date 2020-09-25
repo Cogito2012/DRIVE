@@ -239,7 +239,7 @@ def test_all(testdata_loader, env, agent):
         all_pred_masks.append(mask_pred)  # (B, T, 5, 12)
         all_gt_masks.append(mask_gt)      # (B, T, 5, 12)
         all_toas.append(env.begin_accident.cpu().numpy())  # (B,)
-        all_vids.append(data_info[:,:2].numpy())
+        all_vids.append(data_info[:,:4].numpy())
     
     all_pred_scores = np.concatenate(all_pred_scores)
     all_gt_labels = np.concatenate(all_gt_labels)
