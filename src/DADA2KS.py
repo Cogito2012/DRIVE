@@ -79,7 +79,7 @@ class DADA2KS(Dataset):
         coord_data = []
         with open(coord_file, 'r') as f:
             all_lines = f.readlines()
-            for fid in range(start, end + 1):
+            for fid in range(start, end + 1, self.interval):
                 line = all_lines[fid-1]
                 x_coord = int(line.strip().split(',')[0])
                 y_coord = int(line.strip().split(',')[1])
