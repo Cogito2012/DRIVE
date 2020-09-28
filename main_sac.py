@@ -227,7 +227,8 @@ def test_all(testdata_loader, env, agent):
             # gather actions
             score_pred[:, i_steps] = 0.5 * (actions[:, 0].cpu().numpy() + 1.0)  # map to [0, 1], shape=(B,)
             mask_pred[:, i_steps] = actions[:, 1:].view(-1, env.mask_size[0], env.mask_size[1]).cpu().numpy()  # shape=(B, 1, 5, 12)
-            mask_gt[:, i_steps] = env.mask_data[:, (env.cur_step + 1)*env.step_size, :, :].cpu().numpy()
+            next_step = env.cur_step + 1 if i_steps != env.max_steps - 1 else env.cur_step
+            mask_gt[:, i_steps] = env.mask_data[:, next_step*env.step_size, :, :].cpu().numpy()
 
             # step
             state, reward = env.step(actions, isTraining=False)
