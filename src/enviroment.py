@@ -3,7 +3,8 @@ import torch
 import torch.nn.functional as F
 from src.saliency.mlnet import MLNet
 from src.saliency.tasednet import TASED_v2
-from src.TorchFovea import TorchFovea
+from src.soft_argmax import SpatialSoftArgmax2d
+from metrics.losses import fixation_loss
 import numpy as np
 import os, cv2
 import time
@@ -28,6 +29,8 @@ class DashCamEnv(core.Env):
         self.step_size = cfg.step_size
         self.score_thresh = cfg.score_thresh
         self.state_norm = cfg.state_norm
+        self.rho = cfg.rho
+        self.soft_argmax = SpatialSoftArgmax2d(normalized_coordinates=False)
 
 
     def set_model(self, pretrained=False, weight_file=None):
@@ -69,8 +72,9 @@ class DashCamEnv(core.Env):
 
         # pad the fixations defined in (480,640) into mask grid (5, 12)
         points_pad = self.down_padding_fixations(coord_data)  # (B, T, 2)
-        self.mask_data = self.point_to_mask(points_pad)
-        self.mask_data = self.mask_data.to(self.device, non_blocking=True)  # (B, T, 5, 12)
+        # self.mask_data = self.point_to_mask(points_pad)
+        # self.mask_data = self.mask_data.to(self.device, non_blocking=True)  # (B, T, 5, 12)
+        self.points = points_pad.to(self.device, non_blocking=True)  # (B, T, 2): [r, c]
 
         # create weights for mask
         self.mask_weights = self.gaussian_weighing(points_pad, [0.4, 0.4])
@@ -151,10 +155,10 @@ class DashCamEnv(core.Env):
         frame_data = self.video_data[:, self.cur_step*self.step_size: self.cur_step*self.step_size+self.len_clip]  # (B, T, C, H, W)
         # initial mask
         mask_shape = [frame_data.size(0), 1, self.mask_size[0], self.mask_size[1]]  # (B, 1, 5, 12)
-        init_mask = torch.ones(mask_shape, dtype=torch.float32).to(self.device)
+        init_mask = torch.zeros(mask_shape, dtype=torch.float32).to(self.device)
         # observation by computing saliency
         with torch.no_grad():
-            self.cur_state = self.observe(frame_data, init_mask)  # GPU Array(1, 128)
+            self.cur_state = self.observe(frame_data, init_mask)  # GPU Array(B, 124)
         return self.cur_state.detach()
 
 
@@ -164,25 +168,24 @@ class DashCamEnv(core.Env):
         mask: GPU tensor, (B, 5, 12)
         """ 
         # up padding mask grid from 5x12 to 60x80
-        mask_padded, mask_padded_inv = self.up_padding(mask)
+        saliency_td = self.up_padding(mask)
         B, T, C, H, W = data_input.size()
         if self.saliency == 'MLNet':
             # compute saliency map and volume
             data_input = data_input.view(B*T, C, H, W)
-            saliency, bottom = self.observe_model(data_input, return_bottom=True)
-            saliency = torch.sigmoid(saliency)
-            assert saliency.size(1) == 1, "invalid saliency!"
+            saliency_bu, bottom = self.observe_model(data_input, return_bottom=True)
+            saliency_bu = torch.sigmoid(saliency_bu)
+            assert saliency_bu.size(1) == 1, "invalid saliency!"
+            # saliency fusion
+            saliency = self.rho * saliency_bu + (1 - self.rho) * saliency_td
             # construct states
-            foveal_state = F.max_pool2d(mask_padded * saliency * bottom, kernel_size=bottom.size()[2:])
-            contex_state = F.max_pool2d(mask_padded_inv * saliency * bottom, kernel_size=bottom.size()[2:])
+            foveal_state = F.max_pool2d(saliency * bottom, kernel_size=bottom.size()[2:])
             if self.state_norm:
                 foveal_state = F.normalize(foveal_state, p=2, dim=1)
-                contex_state = F.normalize(contex_state, p=2, dim=1)
             # down padding saliency map from 60x80 to 5x12
-            sal_padded = self.down_padding(saliency)
-            sal_state = sal_padded.view(B, -1)
-            state = torch.cat([foveal_state, contex_state], dim=1).squeeze_(dim=-1).squeeze_(dim=-1)  # (B, 128)
-            state = torch.cat([state, sal_state], dim=1)  # (B, 188)
+            salmap_state = self.down_padding(saliency)
+            state = torch.cat([foveal_state.squeeze_(dim=-1).squeeze_(dim=-1), 
+                               salmap_state.view(B, -1)], dim=1)  # (B, 124)
         elif self.saliency == 'TASED-Net':
             data_input = data_input.permute(0, 2, 1, 3, 4).contiguous()  # (B, C=3, T=8, H=480, W=640)
             # compute saliency map
@@ -199,7 +202,6 @@ class DashCamEnv(core.Env):
         """
         out_shape = [mask.size(0), mask.size(1), self.output_shape[0], self.output_shape[1]]
         mask_padded = torch.zeros(out_shape, dtype=torch.float32).to(self.device)
-        mask_padded_inv = torch.zeros_like(mask_padded).to(self.device)
         # get size and ratios
         rows_rate = self.mask_size[0] / self.output_shape[0]  # h ratio
         cols_rate = self.mask_size[1] / self.output_shape[1]  # w ratio
@@ -208,13 +210,11 @@ class DashCamEnv(core.Env):
             new_cols = (self.mask_size[1] * self.output_shape[0]) // self.mask_size[0]
             mask_ctr = F.interpolate(mask, size=(self.output_shape[0], new_cols))
             mask_padded[:, :, :, ((self.output_shape[1] - new_cols) // 2):((self.output_shape[1] - new_cols) // 2 + new_cols)] = mask_ctr
-            mask_padded_inv[:, :, :, ((self.output_shape[1] - new_cols) // 2):((self.output_shape[1] - new_cols) // 2 + new_cols)] = 1 - mask_ctr
         else:
             new_rows = (self.mask_size[0] * self.output_shape[1]) // self.mask_size[1]
             mask_ctr = F.interpolate(mask, size=(new_rows, self.output_shape[1]))
             mask_padded[:, :, ((self.output_shape[0] - new_rows) // 2):((self.output_shape[0] - new_rows) // 2 + new_rows), :] = mask_ctr
-            mask_padded_inv[:, :, ((self.output_shape[0] - new_rows) // 2):((self.output_shape[0] - new_rows) // 2 + new_rows), :] = 1 - mask_ctr
-        return mask_padded, mask_padded_inv
+        return mask_padded
 
     def down_padding(self, saliency):
         """saliency: GPU tensor, (B, 1, 60, 80), padded to (B, 1, 5, 12)
@@ -254,14 +254,19 @@ class DashCamEnv(core.Env):
         tta_weights = (torch.exp(exp_term) - 1.0) / (torch.exp(self.begin_accident) - 1.0)
         tta_weights = tta_weights.float()
         # compute XNOR distance between pred and gt
-        xnor_dist = torch.logical_not(torch.logical_xor(score_pred, self.clsID)).float()
+        cls_pred = (score_pred > self.score_thresh).int()
+        xnor_dist = torch.logical_not(torch.logical_xor(cls_pred, self.clsID)).float()
         r_tta = (tta_weights * xnor_dist).unsqueeze(1)
 
-        # compute the attention reward
-        mask_gt = self.mask_data[:, (self.cur_step + 1)*self.step_size, :, :]
-        weights = self.mask_weights[:, (self.cur_step + 1)*self.step_size, :, :]
-        r_atten = -1.0 * F.binary_cross_entropy(mask_pred.squeeze_(1), mask_gt, weight=weights, reduction='none')
-        r_atten = torch.mean(r_atten, (1, 2)).unsqueeze(1)
+        # compute fixation prediction award
+        fix_pred = self.soft_argmax(mask_pred)  # (B, 1, 2): [x, y] (not normalized)
+        fix_pred = torch.cat((fix_pred[:, :, 1], fix_pred[:, :, 0]), dim=1)  # (B, 2): [r, c]
+        fix_gt = self.points[:, (self.cur_step + 1)*self.step_size, :]  # (B, 2), [r, c]
+        # compute distance
+        dist_sq = torch.sum(torch.pow(fix_pred.float() - fix_gt.float(), 2), dim=1, keepdim=True)
+        mask_reward = fix_gt[:, 0].bool().float() * fix_gt[:, 1].bool().float()  # (B,)
+        dmax = np.sqrt(np.sum(np.square(self.mask_size)))
+        r_atten = mask_reward.unsqueeze(1) * torch.exp(-2.0 * dist_sq / dmax)  # If fixation exists (r>0 & c>0), reward = exp(-mse)
 
         # total reward
         reward_batch = r_tta + r_atten
@@ -275,7 +280,8 @@ class DashCamEnv(core.Env):
         # parse actions (current accident scores, the next attention mask)
         score_pred = 0.5 * (actions[:, 0] + 1.0)  # map to [0, 1], shape=(B, 1)
         mask_pred = actions[:, 1:].view(-1, 1, self.mask_size[0], self.mask_size[1])  # shape=(B, 1, 5, 12)
-        
+        mask_pred = 0.5 * (mask_pred + 1.0)
+
         if self.cur_step < self.max_steps - 1:  # cur_step starts from 0
             # next state
             next_state = self.get_next_state(mask_pred, self.cur_step + 1)

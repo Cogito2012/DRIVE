@@ -126,8 +126,13 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
             episode_reward += rewards.sum()
 
             # push the current step into memory
+            cur_time = torch.FloatTensor([(env.cur_step-1) * env.step_size / env.fps] * cfg.ENV.batch_size).unsqueeze(1).to(cfg.device)  # (B, 1)
+            next_step = env.cur_step if episode_steps != env.max_steps else env.cur_step - 1
+            gt_fix_next = env.points[:, next_step*env.step_size, :].float()  # (B, 2)
+            labels = torch.cat((cur_time, env.clsID.float().unsqueeze(1), env.begin_accident.unsqueeze(1), gt_fix_next), dim=1)
+
             mask = done if episode_steps == env.max_steps else done - 1.0
-            memory.push(state, actions, rewards, next_state, rnn_state, mask) # Append transition to memory
+            memory.push(state, actions, rewards, next_state, rnn_state, labels, mask) # Append transition to memory
             # shift to next state
             state = next_state.clone()
 

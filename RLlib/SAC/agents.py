@@ -202,36 +202,39 @@ class AccidentPolicy(nn.Module):
 
 
 class AttentionPolicy(nn.Module):
-    def __init__(self, dim_state_contex, dim_state_atten, dim_action_attention, hidden_dim, mask_size, sal_size, policy_type='Gaussian'):
+    def __init__(self, dim_state_atten, dim_action_attention, hidden_dim, mask_size, sal_size, policy_type='Gaussian'):
         super(AttentionPolicy, self).__init__()
         self.mask_size = mask_size
         self.sal_size = sal_size
         self.policy_type = policy_type
         assert self.mask_size[0] * self.mask_size[1] == dim_action_attention
 
-        self.linear1 = nn.Linear(dim_state_contex, hidden_dim)
-        self.linear2 = nn.Linear(hidden_dim, hidden_dim)
-        self.mean_linear = nn.Linear(hidden_dim, dim_action_attention)
-        if self.policy_type == 'Gaussian':
-            self.log_std_linear = nn.Linear(hidden_dim, dim_action_attention)
-        else:
-            self.noise = torch.Tensor(dim_action_attention)
         self.conv1 = nn.Conv2d(1, 8, 3, stride=1)
         self.conv2 = nn.Conv2d(8, 16, 3, stride=1)
         self.conv3 = nn.Conv2d(16, 32, 3, stride=1)
-        self.conv4 = nn.Conv2d(32, 1, 1, stride=1)
+        self.conv_mean = nn.Conv2d(32, 1, 1, stride=1)
+        if self.policy_type == 'Gaussian':
+            self.log_std_linear = nn.Linear(self.mask_size[0] * self.mask_size[1], dim_action_attention)
+        else:
+            self.noise = torch.Tensor(dim_action_attention)
 
         self.apply(weights_init_)
 
-    def forward(self, contex, attention):
-        """contex: (B, 64)
+    def forward(self, attention):
+        """
         attention: (B, 60)
         """
-        # compute attention shift
-        x = F.relu(self.linear1(contex))
-        x = F.relu(self.linear2(x))
-        mean = self.mean_linear(x)
+        # recover the shape
+        x = attention.view(-1, 1, self.mask_size[0], self.mask_size[1])  # (B, 1, 5, 12)
+        x = F.interpolate(x, self.sal_size)  # (B, 1, 60, 80)
+        x = F.relu(self.conv1(x))  # (B, 8, 59, 78)
+        x = F.relu(self.conv2(x))  # (B, 16, 56, 76)
+        x = F.relu(self.conv3(x))  # (B, 32, 54, 74)
+        x = F.interpolate(x, self.mask_size)
+        x = self.conv_mean(x)
+        x = x.view(-1, self.mask_size[0] * self.mask_size[1])
         if self.policy_type == 'Gaussian':
+            mean = x.clone()
             log_std = self.log_std_linear(x)
             log_std = torch.clamp(log_std, min=LOG_SIG_MIN, max=LOG_SIG_MAX)
         else:
@@ -239,28 +242,14 @@ class AttentionPolicy(nn.Module):
             log_std = torch.tensor(0.0).to(mean.device)
         return mean, log_std
 
-    def attention_shift(self, attention, shift):
-        att_reshape = attention.view(-1, 1, self.mask_size[0], self.mask_size[1])
-        shift_respahe = shift.view(-1, 1, self.mask_size[0], self.mask_size[1])
-        x = att_reshape + shift_respahe
-        x = F.interpolate(x, self.sal_size)
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
-        x = F.interpolate(x, self.mask_size)
-        x = torch.sigmoid(self.conv4(x))  # (B, 1, 5, 12)
-        x = x.view(-1, self.mask_size[0] * self.mask_size[1])
-        return x
-
-
-    def sample(self, contex, attention):
-        mean, log_std = self.forward(contex, attention)
+    def sample(self, attention):
+        mean, log_std = self.forward(attention)
         if self.policy_type == 'Gaussian':
             std = log_std.exp()
             normal = Normal(mean, std)
             x_t = normal.rsample()  # for reparameterization trick (mean + std * N(0,1))
             y_t = torch.tanh(x_t)
-            action_shift = y_t.clone()
+            action = y_t.clone()
             log_prob = normal.log_prob(x_t)
             # Enforcing Action Bound
             log_prob -= torch.log(1 - y_t.pow(2) + epsilon)
@@ -269,12 +258,8 @@ class AttentionPolicy(nn.Module):
         else:
             noise = self.noise.normal_(0., std=0.1)
             noise = noise.clamp(-0.25, 0.25)
-            action_shift = mean + noise
-            log_prob = torch.tensor(0.0).to(action_shift.device)
-        
-        # attention shift
-        action = self.attention_shift(attention, action_shift)
-        mean = self.attention_shift(attention, mean)
+            action = mean + noise
+            log_prob = torch.tensor(0.0).to(action.device)
         return action, log_prob, mean
         
 

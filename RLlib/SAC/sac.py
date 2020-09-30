@@ -5,6 +5,8 @@ from torch.optim import Adam
 # from torch.nn.utils import clip_grad_norm_
 from .utils import soft_update, hard_update
 from .agents import AccidentPolicy, QNetwork, StateDecoder, AttentionPolicy
+from src.soft_argmax import SpatialSoftArgmax2d
+from metrics.losses import exp_loss, fixation_loss
 import time
 
 
@@ -16,8 +18,9 @@ class SAC(object):
         self.gamma = cfg.gamma
         self.tau = cfg.tau
         self.alpha = cfg.alpha
-        self.beta_actor = cfg.beta_actor
-        self.beta_fix = cfg.beta_fix
+        self.beta_accident = cfg.beta_accident
+        self.beta_fixation = cfg.beta_fixation
+        self.losses = {}
 
         self.arch_type = cfg.arch_type
         self.policy_accid = cfg.policy_accid
@@ -30,9 +33,8 @@ class SAC(object):
 
         # state dims
         self.dim_state_fovea = cfg.dim_state_fovea
-        self.dim_state_contex = cfg.dim_state_contex
         self.dim_state_atten = cfg.dim_state_atten
-        self.dim_state = cfg.dim_state_fovea + cfg.dim_state_contex + cfg.dim_state_atten
+        self.dim_state = cfg.dim_state_fovea + cfg.dim_state_atten
         # action dims
         self.dim_action_accident = cfg.dim_action_accident
         self.dim_action_attention = cfg.dim_action_attention
@@ -77,9 +79,7 @@ class SAC(object):
             self.alpha = 0
             self.automatic_entropy_tuning = False
         
-        # self.ce_loss = torch.nn.CrossEntropyLoss(reduction='none')
-        self.nll_loss = torch.nn.NLLLoss(reduction='none')
-        self.mse_loss = torch.nn.MSELoss(reduction='none')
+        self.soft_argmax = SpatialSoftArgmax2d(normalized_coordinates=False)
 
 
     def create_actor_critics(self, cfg):
@@ -90,7 +90,7 @@ class SAC(object):
         policy_accident = AccidentPolicy(self.dim_state_fovea, self.dim_action_accident, cfg.hidden_size, 
             dim_latent=cfg.dim_latent, arch_type=cfg.arch_type, policy_type=self.policy_accid).to(self.device)
         # create attention mask prediction policy
-        policy_attention = AttentionPolicy(self.dim_state_contex, self.dim_state_atten, self.dim_action_attention, 
+        policy_attention = AttentionPolicy(self.dim_state_atten, self.dim_action_attention, 
             cfg.hidden_size, self.mask_size, self.sal_size, policy_type=self.policy_atten).to(self.device)
         return policy_accident, policy_attention, critic, critic_target
 
@@ -109,15 +109,14 @@ class SAC(object):
         """state: (B, 64+64+60), [fovea_state, contex_state, mask_state]
         """
         foveal_state = state[:, :self.dim_state_fovea]
-        contex_state = state[:, self.dim_state_fovea: self.dim_state_fovea + self.dim_state_contex]
-        mask_state = state[:, self.dim_state_fovea + self.dim_state_contex:]
+        mask_state = state[:, self.dim_state_fovea:]
         # execute actions
         if evaluate is False:
             action_acc, rnn_state, _, _ = self.policy_accident.sample(foveal_state, rnn_state)
-            action_att, _, _ = self.policy_attention.sample(contex_state, mask_state)
+            action_att, _, _ = self.policy_attention.sample(mask_state)
         else:
             _, rnn_state, _, action_acc = self.policy_accident.sample(foveal_state, rnn_state)
-            _, _, action_att = self.policy_attention.sample(contex_state, mask_state)
+            _, _, action_att = self.policy_attention.sample(mask_state)
         # get actions
         actions = torch.cat([action_acc.detach(), action_att.detach()], dim=1)
         if rnn_state is not None:
@@ -129,11 +128,10 @@ class SAC(object):
         with torch.no_grad():
             # split the next_states
             next_fovea_state = next_state_batch[:, :self.dim_state_fovea]
-            next_contex_state = next_state_batch[:, self.dim_state_fovea: self.dim_state_fovea + self.dim_state_contex]
-            next_mask_state = next_state_batch[:, self.dim_state_fovea + self.dim_state_contex:]
+            next_mask_state = next_state_batch[:, self.dim_state_fovea:]
             # inference two policies
             next_accid_state_action, _, next_accid_state_log_pi, _ = self.policy_accident.sample(next_fovea_state, rnn_state_batch)
-            next_atten_state_action, next_atten_state_log_pi, _ = self.policy_attention.sample(next_contex_state, next_mask_state)
+            next_atten_state_action, next_atten_state_log_pi, _ = self.policy_attention.sample(next_mask_state)
             next_state_action = torch.cat([next_accid_state_action, next_atten_state_action], dim=1)
             # interence critics
             qf1_next_target, qf2_next_target = self.critic_target(next_state_batch, next_state_action)
@@ -147,18 +145,17 @@ class SAC(object):
         self.critic_optim.zero_grad()
         qf_loss.backward()
         self.critic_optim.step()
-        return qf_loss
+        self.losses.update({'critic': qf_loss.item()})
 
 
-    def update_actor(self, state_batch, rnn_state_batch):
+    def update_actor(self, state_batch, rnn_state_batch, labels_batch):
         # split the states
         fovea_state = state_batch[:, :self.dim_state_fovea]
-        contex_state = state_batch[:, self.dim_state_fovea: self.dim_state_fovea + self.dim_state_contex]
-        mask_state = state_batch[:, self.dim_state_fovea + self.dim_state_contex:]
+        mask_state = state_batch[:, self.dim_state_fovea:]
 
         # sampling
         pi_accid, _, log_pi_accid, mean_accid = self.policy_accident.sample(fovea_state, rnn_state_batch, detach=True)
-        pi_atten, log_pi_atten, mean_atten = self.policy_attention.sample(contex_state, mask_state)
+        pi_atten, log_pi_atten, mean_atten = self.policy_attention.sample(mask_state)
         pi = torch.cat([pi_accid, pi_atten], dim=1)
         log_pi = log_pi_accid + log_pi_atten
 
@@ -167,12 +164,33 @@ class SAC(object):
 
         # actor loss
         actor_loss = ((self.alpha * log_pi) - min_qf_pi).mean() # Jπ = 𝔼st∼D,εt∼N[α * logπ(f(εt;st)|st) − Q(st,f(εt;st))]
+
+        # compute the early anticipation loss
+        score_pred = 0.5 * (mean_accid + 1.0).squeeze(1)  # (B,)
+        curtime_batch, clsID_batch, toa_batch, fix_batch = labels_batch[:, 0], labels_batch[:, 1], labels_batch[:, 2], labels_batch[:, 3:5]
+        cls_target = torch.zeros(score_pred.size(0), self.num_classes).to(self.device)
+        cls_target.scatter_(1, clsID_batch.unsqueeze(1).long(), 1)  # one-hot
+        cls_loss = exp_loss(score_pred, cls_target, curtime_batch, toa_batch)  # expoential binary cross entropy
+
+        # fixation loss
+        atten_map = mean_atten.view(-1, 1, self.mask_size[0], self.mask_size[1])  # (B, 1, h, w)
+        fix_pred = self.soft_argmax(atten_map)  # (B, 1, 2): [x, y]
+        fix_pred = torch.cat((fix_pred[:, :, 1], fix_pred[:, :, 0]), dim=1)  # (B, 2): [r, c]
+        fix_loss = fixation_loss(fix_pred, fix_batch, normalize=True, extends=self.mask_size)
+
+        # weighted sum 
+        policy_loss = actor_loss + self.beta_accident * cls_loss + self.beta_fixation * fix_loss
+
         # update accident predictor
         self.policy_optim.zero_grad()
-        actor_loss.backward()
+        policy_loss.backward()
         self.policy_optim.step()
 
-        return log_pi, actor_loss
+        self.losses.update({'policy/total': policy_loss.item(),
+                            'policy/actor': actor_loss.item(),
+                            'policy/accident': cls_loss.item(),
+                            'policy/fixation': fix_loss.item()})
+        return log_pi
 
 
     def update_entropy(self, log_pi):
@@ -185,10 +203,11 @@ class SAC(object):
 
             self.alpha = self.log_alpha.exp()
             alpha_tlogs = self.alpha.clone() # For TensorboardX logs
+
+            self.losses.update({'alpha': alpha_loss.item()})
         else:
-            alpha_loss = torch.tensor(0.).to(self.device)
             alpha_tlogs = torch.tensor(self.alpha) # For TensorboardX logs
-        return alpha_loss, alpha_tlogs
+        return alpha_tlogs
 
 
     def update_decoder(self, state, latent_lambda=0.0):
@@ -208,23 +227,22 @@ class SAC(object):
         loss.backward()
         self.encoder_optim.step()
         self.decoder_optim.step()
-
-        return loss
+        self.losses.update({'autoencoder': loss.item()})
 
 
     def update_parameters(self, memory, updates):
         
         # sampling from replay buffer memory
-        state_batch, action_batch, reward_batch, next_state_batch, rnn_state_batch, mask_batch = memory.sample(self.batch_size, self.device)
+        state_batch, action_batch, reward_batch, next_state_batch, rnn_state_batch, labels_batch, mask_batch = memory.sample(self.batch_size, self.device)
 
         # update critic networks
-        qf_loss = self.update_critic(state_batch, action_batch, reward_batch, next_state_batch, mask_batch, rnn_state_batch)
+        self.update_critic(state_batch, action_batch, reward_batch, next_state_batch, mask_batch, rnn_state_batch)
         
         # update actor and alpha
-        log_pi, policy_loss = self.update_actor(state_batch, rnn_state_batch)
+        log_pi = self.update_actor(state_batch, rnn_state_batch, labels_batch)
 
         # update entropy term
-        alpha_loss, alpha_tlogs = self.update_entropy(log_pi)
+        alpha_tlogs = self.update_entropy(log_pi)
 
         # update critic target
         if updates % self.target_update_interval == 0:
@@ -232,16 +250,10 @@ class SAC(object):
 
         # update decoder
         if self.arch_type == 'rae':
-            loss_ae = self.update_decoder(state_batch, latent_lambda=self.latent_lambda)
+            self.update_decoder(state_batch, latent_lambda=self.latent_lambda)
 
-        # gather results
-        losses = {'critic': qf_loss.item(), 
-                  'policy': policy_loss.item(),
-                  'alpha': alpha_loss.item()}
-        if self.arch_type == 'rae':
-            losses.update({'autoencoder': loss_ae.item()})
         alpha_values = alpha_tlogs.item()
-        return losses, alpha_values
+        return self.losses, alpha_values
 
 
     def save_models(self, ckpt_dir, cfg, epoch):
@@ -266,41 +278,3 @@ class SAC(object):
             print("=> loaded checkpoint '{}'".format(weight_file))
         else:
             raise FileNotFoundError
-
-
-    def _exp_loss(self, pred, target, time, toa):
-        '''
-        :param pred:
-        :param target: onehot codings for binary classification
-        :param time:
-        :param toa:
-        :return:
-        '''
-        pred = torch.cat([(1.0 - pred).unsqueeze(1), pred.unsqueeze(1)], dim=1)
-        # positive example (exp_loss)
-        target_cls = target[:, 1]
-        target_cls = target_cls.to(torch.long)
-        
-        penalty = -torch.max(torch.zeros_like(toa).to(toa.device, pred.dtype), toa.to(pred.dtype) - time - 1)
-        penalty = torch.where(toa > 0, penalty, torch.zeros_like(penalty).to(pred.device))
-
-        # pos_loss = -torch.mul(torch.exp(penalty), -self.ce_loss(pred, target_cls))
-        pos_loss = -torch.mul(torch.exp(penalty), -self.nll_loss(torch.log(pred + 1e-6), target_cls))
-        # negative example
-        # neg_loss = self.ce_loss(pred, target_cls)
-        neg_loss = self.nll_loss(torch.log(pred + 1e-6), target_cls)
-        loss = torch.mean(torch.add(torch.mul(pos_loss, target[:, 1]), torch.mul(neg_loss, target[:, 0])))
-        return loss
-
-    
-    def _fixation_loss(self, pred_fix, gt_fix):
-        # Mask out the fixations of accident frames
-        mask = gt_fix[:,0].gt(0.5)
-        pred_fix = pred_fix[mask]
-        gt_fix = gt_fix[mask]
-        if pred_fix.size(0) > 0 and gt_fix.size(0) > 0:
-            # MSE loss
-            loss = torch.mean(self.mse_loss(pred_fix, gt_fix))
-        else:
-            loss = torch.tensor(0.).to(self.device)
-        return loss

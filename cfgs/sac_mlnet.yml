@@ -8,7 +8,8 @@ ENV:
   step_size: 1
   len_clip: 1
   num_workers: 4
-  score_thresh: 0.7
+  rho: 0.5
+  score_thresh: 0.5
   use_salmap: false  # set to False to speedup data loading
   state_norm: true
   saliency: 'MLNet'
@@ -20,7 +21,6 @@ SAC:
   num_classes: 2
   hidden_size: 64
   dim_state_fovea: 64
-  dim_state_contex: 64
   dim_state_atten: 60  # 5 x 12
   dim_action_accident: 1
   dim_action_attention: 60
@@ -29,8 +29,8 @@ SAC:
   target_update_interval: 1000
   automatic_entropy_tuning: true
   alpha: 0.001
-  beta_actor: 0.01
-  beta_fix: 1.0
+  beta_accident: 1.0
+  beta_fixation: 10.0
   replay_size: 1000000
   batch_size: 64
   updates_per_step: 1
