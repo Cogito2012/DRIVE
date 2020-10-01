@@ -72,7 +72,7 @@ class SAC(object):
             else:
                 print("When automatic entropy, at least one policy is Gaussian!")
                 raise ValueError
-            self.target_entropy = -torch.prod(torch.Tensor((dim_entropy)).to(self.device)).item()
+            self.target_entropy = -torch.prod(torch.Tensor([dim_entropy]).to(self.device)).item()
             self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
             self.alpha_optim = Adam([self.log_alpha], lr=cfg.lr)
         else:
