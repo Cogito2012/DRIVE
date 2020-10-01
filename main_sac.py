@@ -121,7 +121,7 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
                     updates += 1
 
             # step to next state
-            next_state, rewards = env.step(actions) # Step
+            next_state, rewards, info = env.step(actions) # Step
             episode_steps += 1
             episode_reward += rewards.sum()
 
@@ -157,7 +157,7 @@ def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
             # select action
             actions, rnn_state = agent.select_action(state, rnn_state, evaluate=True)
             # step
-            state, reward = env.step(actions)
+            state, reward, info = env.step(actions)
             episode_reward += reward.sum()
             episode_steps += 1
 
@@ -210,7 +210,7 @@ def train():
     
 
 def test_all(testdata_loader, env, agent):
-    all_pred_scores, all_gt_labels, all_pred_masks, all_gt_masks, all_toas, all_vids = [], [], [], [], [], []
+    all_pred_scores, all_gt_labels, all_pred_fixations, all_gt_fixations, all_toas, all_vids = [], [], [], [], [], []
     for i, (video_data, _, coord_data, data_info) in enumerate(testdata_loader):  # (B, T, H, W, C)
         print("Testing video %d/%d, file: %d/%d.avi, frame #: %d (fps=%.2f)."
             %(i+1, len(testdata_loader), data_info[0, 0], data_info[0, 1], video_data.size(1), 30/cfg.ENV.frame_interval))
@@ -222,38 +222,37 @@ def test_all(testdata_loader, env, agent):
         rnn_state = (torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device),
                         torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device))
         score_pred = np.zeros((cfg.ENV.batch_size, env.max_steps), dtype=np.float32)
-        mask_pred = np.zeros((cfg.ENV.batch_size, env.max_steps, env.mask_size[0], env.mask_size[1]), dtype=np.float32)
-        mask_gt = np.zeros_like(mask_pred, dtype=np.float32)
+        fixation_pred = np.zeros((cfg.ENV.batch_size, env.max_steps, 2), dtype=np.float32)
+        fixation_gt = np.zeros((cfg.ENV.batch_size, env.max_steps, 2), dtype=np.float32)
         i_steps = 0
         while i_steps < env.max_steps:
             # select action
             actions, rnn_state = agent.select_action(state, rnn_state, evaluate=True)
-
-            # gather actions
-            score_pred[:, i_steps] = 0.5 * (actions[:, 0].cpu().numpy() + 1.0)  # map to [0, 1], shape=(B,)
-            mask_pred[:, i_steps] = actions[:, 1:].view(-1, env.mask_size[0], env.mask_size[1]).cpu().numpy()  # shape=(B, 1, 5, 12)
-            next_step = env.cur_step + 1 if i_steps != env.max_steps - 1 else env.cur_step
-            mask_gt[:, i_steps] = env.mask_data[:, next_step*env.step_size, :, :].cpu().numpy()
-
             # step
-            state, reward = env.step(actions, isTraining=False)
+            state, reward, info = env.step(actions, isTraining=False)
+            # gather actions
+            score_pred[:, i_steps] = info['pred_score'].cpu().numpy()  # shape=(B,)
+            fixation_pred[:, i_steps] = info['pred_fixation'].cpu().numpy()  # shape=(B, 2)
+            next_step = env.cur_step if i_steps != env.max_steps - 1 else env.cur_step - 1
+            fixation_gt[:, i_steps] = env.points[:, next_step*env.step_size, :].cpu().numpy()
+            # next step
             i_steps += 1
 
         # save results
         all_pred_scores.append(score_pred)  # (B, T)
         all_gt_labels.append(env.clsID.cpu().numpy())  # (B,)
-        all_pred_masks.append(mask_pred)  # (B, T, 5, 12)
-        all_gt_masks.append(mask_gt)      # (B, T, 5, 12)
+        all_pred_fixations.append(fixation_pred)  # (B, T, 2)
+        all_gt_fixations.append(fixation_gt)      # (B, T, 2)
         all_toas.append(env.begin_accident.cpu().numpy())  # (B,)
         all_vids.append(data_info[:,:4].numpy())
     
     all_pred_scores = np.concatenate(all_pred_scores)
     all_gt_labels = np.concatenate(all_gt_labels)
-    all_pred_masks = np.concatenate(all_pred_masks)
-    all_gt_masks = np.concatenate(all_gt_masks)
+    all_pred_fixations = np.concatenate(all_pred_fixations)
+    all_gt_fixations = np.concatenate(all_gt_fixations)
     all_toas = np.concatenate(all_toas)
     all_vids = np.concatenate(all_vids)
-    return all_pred_scores, all_gt_labels, all_pred_masks, all_gt_masks, all_toas, all_vids
+    return all_pred_scores, all_gt_labels, all_pred_fixations, all_gt_fixations, all_toas, all_vids
 
 def test():
     # prepare output directory
@@ -264,8 +263,8 @@ def test():
     result_file = os.path.join(output_dir, 'results.npz')
     if os.path.exists(result_file):
         save_dict = np.load(result_file, allow_pickle=True)
-        all_pred_scores, all_gt_labels, all_pred_masks, all_gt_masks, all_toas, all_vids = \
-            save_dict['pred_scores'], save_dict['gt_labels'], save_dict['pred_masks'], save_dict['gt_masks'], save_dict['toas'], save_dict['vids']
+        all_pred_scores, all_gt_labels, all_pred_fixations, all_gt_fixations, all_toas, all_vids = \
+            save_dict['pred_scores'], save_dict['gt_labels'], save_dict['pred_fixations'], save_dict['gt_fixations'], save_dict['toas'], save_dict['vids']
     else:
         # initilize environment
         env = DashCamEnv(cfg.ENV, device=cfg.device)
@@ -285,14 +284,16 @@ def test():
         # start to test 
         agent.set_status('eval')
         with torch.no_grad():
-            all_pred_scores, all_gt_labels, all_pred_masks, all_gt_masks, all_toas, all_vids = test_all(testdata_loader, env, agent)
-        np.savez(result_file[:-4], pred_scores=all_pred_scores, gt_labels=all_gt_labels, pred_masks=all_pred_masks, gt_masks=all_gt_masks, toas=all_toas, vids=all_vids)
+            all_pred_scores, all_gt_labels, all_pred_fixations, all_gt_fixations, all_toas, all_vids = test_all(testdata_loader, env, agent)
+        np.savez(result_file[:-4], pred_scores=all_pred_scores, gt_labels=all_gt_labels, pred_fixations=all_pred_fixations, gt_fixations=all_gt_fixations, toas=all_toas, vids=all_vids)
 
     # evaluate the results
     AP, mTTA, TTA_R80, p05, r05, t05 = evaluation_accident(all_pred_scores, all_gt_labels, all_toas, fps=30/cfg.ENV.frame_interval)
     print("AP = %.4f, mean TTA = %.4f, TTA@0.8 = %.4f"%(AP, mTTA, TTA_R80))
     print("\nprecision@0.5 = %.4f, recall@0.5 = %.4f, TTA@0.5 = %.4f\n"%(p05, r05, t05))
     
+    mse_fix = evaluation_fixation(all_pred_fixations, all_gt_fixations)
+    print('Fixation Prediction MSE=%.4f'%(mse_fix))
 
 
 if __name__ == "__main__":

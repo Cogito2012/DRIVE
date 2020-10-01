@@ -121,14 +121,16 @@ def evaluation_accident(all_pred, all_labels, time_of_accidents, fps=30.0):
     return AP, mTTA, TTA_R80, p05[0], r05[0], t05[0] * total_seconds
 
 
-def evaluation_fixation(preds, labels, metric='mse'):
+def evaluation_fixation(pred_fixations, gt_fixations, metric='mse'):
     """Evaluate the Mean Squared Error for fixation prediction
+    pred_masks: (N, T, 2)
+    gt_fixations: (N, T, 2)
     """
     mse_result = []
-    for i, gt_fixes in enumerate(labels):
+    for i, (pred_fixes, gt_fixes) in enumerate(zip(pred_fixations, gt_fixations)):
         inds = np.where(gt_fixes[:, 0] > 0)[0]
         if len(inds) > 0:  # ignore the non-accident frames
-            pred_fix = preds[i][inds, :]
+            pred_fix = pred_fixes[inds, :]
             gt_fix = gt_fixes[inds, :]
             mse = np.mean(np.sqrt(np.sum(np.square(pred_fix - gt_fix), axis=1)), axis=0)
             mse_result.append(mse)

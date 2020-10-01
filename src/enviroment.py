@@ -244,9 +244,9 @@ class DashCamEnv(core.Env):
         return next_state.detach()
 
 
-    def get_reward(self, score_pred, mask_pred):
+    def get_reward(self, score_pred, fixation_pred):
         """ score_pred: (B,): accident score
-            mask_pred: (B, 1, 5, 12): attention mask    
+            fixation_pred: (B, 1, 2): attention mask    
         """
         # compute the time-to-accident reward
         batch_size = score_pred.size(0)
@@ -259,11 +259,9 @@ class DashCamEnv(core.Env):
         r_tta = (tta_weights * xnor_dist).unsqueeze(1)
 
         # compute fixation prediction award
-        fix_pred = self.soft_argmax(mask_pred)  # (B, 1, 2): [x, y] (not normalized)
-        fix_pred = torch.cat((fix_pred[:, :, 1], fix_pred[:, :, 0]), dim=1)  # (B, 2): [r, c]
         fix_gt = self.points[:, (self.cur_step + 1)*self.step_size, :]  # (B, 2), [r, c]
         # compute distance
-        dist_sq = torch.sum(torch.pow(fix_pred.float() - fix_gt.float(), 2), dim=1, keepdim=True)
+        dist_sq = torch.sum(torch.pow(fixation_pred.float() - fix_gt.float(), 2), dim=1, keepdim=True)
         mask_reward = fix_gt[:, 0].bool().float() * fix_gt[:, 1].bool().float()  # (B,)
         dmax = np.sqrt(np.sum(np.square(self.mask_size)))
         r_atten = mask_reward.unsqueeze(1) * torch.exp(-2.0 * dist_sq / dmax)  # If fixation exists (r>0 & c>0), reward = exp(-mse)
@@ -282,11 +280,18 @@ class DashCamEnv(core.Env):
         mask_pred = actions[:, 1:].view(-1, 1, self.mask_size[0], self.mask_size[1])  # shape=(B, 1, 5, 12)
         mask_pred = 0.5 * (mask_pred + 1.0)
 
+        fix_pred = self.soft_argmax(mask_pred)  # (B, 1, 2): [x, y] (not normalized)
+        fix_pred = torch.cat((fix_pred[:, :, 1], fix_pred[:, :, 0]), dim=1)  # (B, 2): [r, c]
+
+        info = {}
+        if not isTraining:
+            info.update({'pred_score': score_pred, 'pred_fixation': fix_pred})
+
         if self.cur_step < self.max_steps - 1:  # cur_step starts from 0
             # next state
             next_state = self.get_next_state(mask_pred, self.cur_step + 1)
             # reward (immediate)
-            cur_rewards = self.get_reward(score_pred, mask_pred) if isTraining else 0
+            cur_rewards = self.get_reward(score_pred, fix_pred) if isTraining else 0
         else:
             # The last step
             next_state = self.cur_state.clone()  # GPU array
@@ -295,5 +300,5 @@ class DashCamEnv(core.Env):
         self.cur_step += 1
         self.cur_state = next_state.clone()
 
-        return next_state, cur_rewards
+        return next_state, cur_rewards, info
 
