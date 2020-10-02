@@ -38,7 +38,7 @@ def create_curve_video(pred_scores, toa, n_frames, frame_interval):
         xvals = np.arange(n_frames+1) * frame_interval
         pred_scores = pred_scores.tolist() + [pred_scores[-1]]
         for t in range(1, n_frames+1):
-            plt.plot(xvals[:(t+1)], pred_scores[:(t+1)], linewidth=3.0, color='r')
+            plt.plot(xvals[:(t+1)], pred_scores[:(t+1)], linewidth=5.0, color='r')
             plt.axhline(y=0.5, xmin=0, xmax=n_frames + 1, linewidth=3.0, color='g', linestyle='--')
             if toa >= 0:
                 plt.axvline(x=toa, ymax=1.0, linewidth=3.0, color='r', linestyle='--')
@@ -57,26 +57,40 @@ def create_curve_video(pred_scores, toa, n_frames, frame_interval):
     return curve_frames
 
 
+def create_heatmap(frame, fixation, color):
+    # calculate grid
+    step_r = int(image_size[0] / mask_size[0])
+    start_r, end_r = int(step_r * fixation[0]), int(step_r * (fixation[0]+1))
+    step_c = int(image_size[1] / mask_size[1])
+    start_c, end_c = int(step_c * fixation[1]), int(step_c * (fixation[1]+1))
+    # add heat map
+    heatmap = np.zeros((step_r, step_c), dtype=np.uint8) + 255
+    heatmap = cv2.applyColorMap(heatmap, color)
+    frame[start_r: end_r, start_c: end_c] = cv2.addWeighted(frame[start_r: end_r, start_c: end_c], 0.5, heatmap, 0.5, 0)
+    return frame
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Visualize Results')
     # For training and testing
     parser.add_argument('--data_path', default="data/DADA-2000-small",
                         help='Configuration file for SAC algorithm.')
-    parser.add_argument('--test_results', default='output/SAC_MLNet_GG/eval/results.npz',
+    parser.add_argument('--test_results', default='output/SAC_GG_v3/eval/results.npz',
                         help='Result file of testing data.')
-    parser.add_argument('--output', default='./output/SAC_MLNet_GG',
+    parser.add_argument('--output', default='./output/SAC_GG_v3',
                         help='Directory of the output. ')
     args = parser.parse_args()
     frame_interval = 5
     image_size = [330, 792]
+    mask_size = [5, 12]
     height, width = 480, 640
 
     if not os.path.exists(args.test_results):
         print('Results file not found!')
         os.sys.exit()
     save_dict = np.load(args.test_results, allow_pickle=True)
-    all_pred_scores, all_gt_labels, all_pred_masks, all_gt_masks, all_toas, all_vids = \
-            save_dict['pred_scores'], save_dict['gt_labels'], save_dict['pred_masks'], save_dict['gt_masks'], save_dict['toas'], save_dict['vids']
+    all_pred_scores, all_gt_labels, all_pred_fixations, all_gt_fixations, all_toas, all_vids = \
+            save_dict['pred_scores'], save_dict['gt_labels'], save_dict['pred_fixations'], save_dict['gt_fixations'], save_dict['toas'], save_dict['vids']
 
     # prepare output directory
     output_dir = os.path.join(args.output, 'vis')
@@ -93,8 +107,8 @@ if __name__ == "__main__":
             break
         pred_scores = all_pred_scores[i]
         gt_labels = all_gt_labels[i]
-        pred_masks = all_pred_masks[i]
-        gt_masks = all_gt_masks[i]
+        pred_fixations = all_pred_fixations[i]
+        gt_fixations = all_gt_fixations[i]
         toa = int(all_toas[i] * 30)
         if not gt_labels > 0:
             continue
@@ -111,15 +125,16 @@ if __name__ == "__main__":
 
         for t, frame in enumerate(frames):
             # add pred_mask as heatmap
-            mask = cv2.resize(pred_masks[t], (image_size[1], image_size[0]), interpolation = cv2.INTER_AREA)
-            mask = (mask - np.min(mask)) / (np.max(mask) - np.min(mask + 1e-6))  # normalize
-            heatmap = np.uint8(255 * mask)
-            heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
-            frame = cv2.addWeighted(frame, 0.5, heatmap, 0.5, 0)
+            # predicted
+            frame = create_heatmap(frame, pred_fixations[t], color=cv2.COLORMAP_JET)
+            if gt_fixations[t, 0] > 0 and gt_fixations[t, 1] > 0:
+                # ground truth
+                frame = create_heatmap(frame, gt_fixations[t], color=cv2.COLORMAP_AUTUMN)
+
             # add curve
             curve_img = curve_frames[t]
             curve_height = int(curve_img.shape[0] * (image_size[1] / curve_img.shape[1]))
             curve_img = cv2.resize(curve_img, (image_size[1], curve_height), interpolation = cv2.INTER_AREA)
-            frame[image_size[0]-curve_height:image_size[0]] = cv2.addWeighted(frame[image_size[0]-curve_height:image_size[0]], 0.5, curve_img, 0.5, 0)
+            frame[image_size[0]-curve_height:image_size[0]] = cv2.addWeighted(frame[image_size[0]-curve_height:image_size[0]], 0.7, curve_img, 0.3, 0)
             video_writer.write(frame)
         
