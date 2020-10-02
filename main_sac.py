@@ -23,6 +23,7 @@ from src.enviroment import DashCamEnv
 from RLlib.SAC.sac import SAC
 from RLlib.SAC.replay_buffer import ReplayMemory, ReplayMemoryGPU
 from metrics.eval_tools import evaluation_accident, evaluation_fixation
+from sklearn.metrics import roc_auc_score
 
 
 def parse_configs():
@@ -288,7 +289,12 @@ def test():
         np.savez(result_file[:-4], pred_scores=all_pred_scores, gt_labels=all_gt_labels, pred_fixations=all_pred_fixations, gt_fixations=all_gt_fixations, toas=all_toas, vids=all_vids)
 
     # evaluate the results
-    AP, mTTA, TTA_R80, p05, r05, t05 = evaluation_accident(all_pred_scores, all_gt_labels, all_toas, fps=30/cfg.ENV.frame_interval)
+    FPS = 30/cfg.ENV.frame_interval
+    all_vid_scores = [max(pred[:int(toa * FPS)]) for toa, pred in zip(all_toas, all_pred_scores)]
+    AUC_video = roc_auc_score(all_gt_labels, all_vid_scores)
+    print("video-level AUC=%.5f"%(AUC_video))
+
+    AP, mTTA, TTA_R80, p05, r05, t05 = evaluation_accident(all_pred_scores, all_gt_labels, all_toas, fps=FPS)
     print("AP = %.4f, mean TTA = %.4f, TTA@0.8 = %.4f"%(AP, mTTA, TTA_R80))
     print("\nprecision@0.5 = %.4f, recall@0.5 = %.4f, TTA@0.5 = %.4f\n"%(p05, r05, t05))
     
