@@ -22,8 +22,7 @@ from torch.utils.tensorboard import SummaryWriter
 from src.enviroment import DashCamEnv
 from RLlib.SAC.sac import SAC
 from RLlib.SAC.replay_buffer import ReplayMemory, ReplayMemoryGPU
-from metrics.eval_tools import evaluation_accident, evaluation_fixation
-from sklearn.metrics import roc_auc_score
+from metrics.eval_tools import evaluation_accident, evaluation_fixation, evaluation_auc_scores
 
 
 def parse_configs():
@@ -290,9 +289,8 @@ def test():
 
     # evaluate the results
     FPS = 30/cfg.ENV.frame_interval
-    all_vid_scores = [max(pred[:int(toa * FPS)]) for toa, pred in zip(all_toas, all_pred_scores)]
-    AUC_video = roc_auc_score(all_gt_labels, all_vid_scores)
-    print("video-level AUC=%.5f"%(AUC_video))
+    AUC_video, AUC_frame = evaluation_auc_scores(all_pred_scores, all_gt_labels, all_toas, FPS, video_len=5)
+    print("v-AUC=%.5f, f-AUC=%.5f\n"%(AUC_video, AUC_frame))
 
     AP, mTTA, TTA_R80, p05, r05, t05 = evaluation_accident(all_pred_scores, all_gt_labels, all_toas, fps=FPS)
     print("AP = %.4f, mean TTA = %.4f, TTA@0.8 = %.4f"%(AP, mTTA, TTA_R80))

@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from scipy.interpolate import make_interp_spline
+from sklearn.metrics import roc_auc_score
 
 
 def draw_pr_curves(precisions, recalls, time_to_accidents, legend_text, vis_file):
@@ -137,6 +138,19 @@ def evaluation_fixation(pred_fixations, gt_fixations, metric='mse'):
     mse_result = np.array(mse_result, dtype=np.float32)
     mse_final = np.mean(mse_result)
     return mse_final
+
+def evaluation_auc_scores(all_pred_scores, all_gt_labels, all_toas, FPS, video_len=5):
+    # compute video-level AUC
+    all_vid_scores = [max(pred[:int(toa * FPS)]) for toa, pred in zip(all_toas, all_pred_scores)]
+    AUC_video = roc_auc_score(all_gt_labels, all_vid_scores)
+    # compute frame-level AUC
+    all_frame_scores, all_frame_gts = [], []
+    for toa, pred, gt_score in zip(all_toas, all_pred_scores, all_gt_labels):
+        toa = video_len if toa <= 0 else toa
+        all_frame_scores = np.concatenate((all_frame_scores, pred[:int(toa * FPS)]))
+        all_frame_gts = np.concatenate((all_frame_gts, [gt_score] * int(toa * FPS)))
+    AUC_frame = roc_auc_score(all_frame_gts, all_frame_scores)
+    return AUC_video, AUC_frame
 
 
 def print_results(Epochs, APvid_all, AP_all, mTTA_all, TTA_R80_all, Unc_all, result_dir):
