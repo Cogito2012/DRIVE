@@ -46,9 +46,9 @@ class SAC(object):
 
         # optimizers
         self.critic_optim = Adam(self.critic.parameters(), lr=cfg.lr)
-        self.params_actor = [p for p in self.policy_accident.parameters()] + [p for p in self.policy_attention.parameters()]
-        self.policy_optim = Adam(self.params_actor, lr=cfg.lr, weight_decay=cfg.weight_decay)
-        # self.policy_att_optim = Adam(self.policy_attention.parameters(), lr=cfg.lr)
+        # self.params_actor = [p for p in self.policy_accident.parameters()] + [p for p in self.policy_attention.parameters()]
+        self.policy_acc_optim = Adam(self.policy_accident.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
+        self.policy_att_optim = Adam(self.policy_attention.parameters(), lr=cfg.lr)
 
         if cfg.arch_type == 'rae':
             # the encoder is shared between actor and critic, weights need to be tied
@@ -179,16 +179,22 @@ class SAC(object):
         fix_loss = fixation_loss(fix_pred, fix_batch, normalize=True, extends=self.mask_size)
 
         # weighted sum 
-        policy_loss = actor_loss + self.beta_accident * cls_loss + self.beta_fixation * fix_loss
+        accid_policy_loss = actor_loss + self.beta_accident * cls_loss
+        atten_policy_loss = actor_loss + self.beta_fixation * fix_loss
 
         # update accident predictor
-        self.policy_optim.zero_grad()
-        policy_loss.backward()
-        self.policy_optim.step()
+        self.policy_acc_optim.zero_grad()
+        accid_policy_loss.backward(retain_graph=True)
+        self.policy_acc_optim.step()
+        # update attention predictor
+        self.policy_att_optim.zero_grad()
+        atten_policy_loss.backward()
+        self.policy_att_optim.step()
 
-        self.losses.update({'policy/total': policy_loss.item(),
+        self.losses.update({'policy/total_accident': accid_policy_loss.item(),
                             'policy/actor': actor_loss.item(),
                             'policy/accident': cls_loss.item(),
+                            'policy/total_attention': atten_policy_loss.item(),
                             'policy/fixation': fix_loss.item()})
         return log_pi
 

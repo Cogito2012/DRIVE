@@ -76,9 +76,9 @@ class DashCamEnv(core.Env):
         # self.mask_data = self.mask_data.to(self.device, non_blocking=True)  # (B, T, 5, 12)
         self.points = points_pad.to(self.device, non_blocking=True)  # (B, T, 2): [r, c]
 
-        # create weights for mask
-        self.mask_weights = self.gaussian_weighing(points_pad, [0.4, 0.4])
-        self.mask_weights = self.mask_weights.to(self.device, non_blocking=True)  # (B, T, 5, 12)
+        # # create weights for mask
+        # self.mask_weights = self.gaussian_weighing(points_pad, [0.4, 0.4])
+        # self.mask_weights = self.mask_weights.to(self.device, non_blocking=True)  # (B, T, 5, 12)
 
         # maximum number of steps
         self.max_steps = (self.video_data.size(1) - self.len_clip + 1) // self.step_size
