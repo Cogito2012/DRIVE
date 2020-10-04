@@ -226,13 +226,13 @@ class AttentionPolicy(nn.Module):
         """
         # recover the shape
         x = attention.view(-1, 1, self.mask_size[0], self.mask_size[1])  # (B, 1, 5, 12)
-        residual = x
+        # residual = x
         x = F.interpolate(x, self.sal_size)  # (B, 1, 60, 80)
         x = F.relu(self.conv1(x))  # (B, 8, 59, 78)
         x = F.relu(self.conv2(x))  # (B, 16, 56, 76)
         x = F.relu(self.conv3(x))  # (B, 32, 54, 74)
         x = F.interpolate(x, self.mask_size)
-        x += residual
+        # x += residual
         x = self.conv_mean(x)
         x = x.view(-1, self.mask_size[0] * self.mask_size[1])
         if self.policy_type == 'Gaussian':
