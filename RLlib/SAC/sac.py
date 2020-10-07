@@ -158,7 +158,8 @@ class SAC(object):
         min_qf_pi = torch.min(qf1_pi, qf2_pi)
 
         # actor loss
-        actor_loss = ((self.alpha * log_pi) - min_qf_pi).mean() # Jπ = 𝔼st∼D,εt∼N[α * logπ(f(εt;st)|st) − Q(st,f(εt;st))]
+        # actor_loss = ((self.alpha * log_pi) - min_qf_pi).mean() # Jπ = 𝔼st∼D,εt∼N[α * logπ(f(εt;st)|st) − Q(st,f(εt;st))]
+        actor_loss = - min_qf_pi.mean()
 
         # compute the early anticipation loss
         score_pred = 0.5 * (mean_acc + 1.0).squeeze(1)  # (B,)
@@ -175,12 +176,12 @@ class SAC(object):
         fix_loss = torch.sum(torch.pow(norm_fix(fix_pred, self.input_size) - norm_fix(fix_gt, self.input_size), 2), dim=1).mean()  # (B) [0, sqrt(2)]
 
         # weighted sum 
-        acc_policy_loss = actor_loss + self.beta_accident * cls_loss
-        fix_policy_loss = actor_loss + self.beta_fixation * fix_loss
+        acc_policy_loss = actor_loss.detach() + self.beta_accident * cls_loss
+        fix_policy_loss = actor_loss.detach() + self.beta_fixation * fix_loss
 
         # update accident predictor
         self.policy_acc_optim.zero_grad()
-        acc_policy_loss.backward(retain_graph=True)
+        acc_policy_loss.backward()
         self.policy_acc_optim.step()
         # update attention predictor
         self.policy_att_optim.zero_grad()
@@ -201,10 +202,11 @@ class SAC(object):
 
             self.alpha_optim.zero_grad()
             alpha_loss.backward()
-            clip_grad_norm_(self.log_alpha, self.dim_action)  # clip gradient of log_alpha
+            # clip_grad_norm_(self.log_alpha, self.dim_action)  # clip gradient of log_alpha
             self.alpha_optim.step()
 
-            self.alpha = self.log_alpha.exp()
+            # self.alpha = self.log_alpha.exp()
+            self.alpha = torch.clamp_max(self.log_alpha.exp(), 10.0)
             alpha_tlogs = self.alpha.clone() # For TensorboardX logs
 
             self.losses.update({'alpha': alpha_loss.item()})
