@@ -48,6 +48,9 @@ def parse_configs():
     device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     cfg.update(device=device)
 
+    cfg.SAC.image_shape = cfg.ENV.image_shape
+    cfg.SAC.input_shape = cfg.ENV.input_shape
+
     return cfg
 
 
@@ -101,7 +104,7 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
                                                                                      desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         # set environment data
         state = env.set_data(video_data, coord_data, data_info)
-
+        # initialization
         episode_reward = torch.tensor(0.0).to(cfg.device)
         done = torch.ones((cfg.ENV.batch_size, 1), dtype=torch.float32).to(cfg.device)
         rnn_state = (torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device),
@@ -128,7 +131,7 @@ def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, up
             # push the current step into memory
             cur_time = torch.FloatTensor([(env.cur_step-1) * env.step_size / env.fps] * cfg.ENV.batch_size).unsqueeze(1).to(cfg.device)  # (B, 1)
             next_step = env.cur_step if episode_steps != env.max_steps else env.cur_step - 1
-            gt_fix_next = env.points[:, next_step*env.step_size, :].float()  # (B, 2)
+            gt_fix_next = env.coord_data[:, next_step * env.step_size, :]  # (B, 2)
             labels = torch.cat((cur_time, env.clsID.float().unsqueeze(1), env.begin_accident.unsqueeze(1), gt_fix_next), dim=1)
 
             mask = done if episode_steps == env.max_steps else done - 1.0
@@ -186,7 +189,7 @@ def train():
     traindata_loader, evaldata_loader = setup_dataloader(cfg.ENV)
 
     # AgentENV
-    agent = SAC(env.mask_size, env.output_shape, cfg.SAC, device=cfg.device)
+    agent = SAC(cfg.SAC, device=cfg.device)
 
     # Memory
     memory = ReplayMemory(cfg.SAC.replay_size) if not cfg.SAC.gpu_replay else ReplayMemoryGPU(cfg.SAC, cfg.ENV.batch_size, device=cfg.device)

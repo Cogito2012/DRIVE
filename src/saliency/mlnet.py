@@ -152,7 +152,8 @@ class MLNet(nn.Module):
         if return_bottom:
             return x, bottom
 
-        x = torch.nn.functional.relu(x, inplace=True)
+        # x = torch.nn.functional.relu(x, inplace=True)
+        x = torch.sigmoid(x)
         return x
 
     

@@ -5,6 +5,35 @@ import numpy as np
 import cv2
 import numbers
 import random
+import torch
+
+
+def scales_to_point(scales, image_size, input_size):
+    """Transform the predicted scaling factor ranging from -1 to 1
+    into the image plane with extends=[480, 640] by considering the image padding
+    """
+    scale_x, scale_y = scales[:, 0], scales[:, 1]
+    rows_rate = image_size[0] / input_size[0]  # 660 / 480
+    cols_rate = image_size[1] / input_size[1]   # 1584 / 640
+    if rows_rate > cols_rate:
+        new_cols = (image_size[1] * input_size[0]) // image_size[0]
+        c = torch.clamp_max(new_cols / 2.0 * (1 + scale_x), new_cols-1)
+        r = torch.clamp_max(input_size[0] / 2.0 * (1 - scale_y), input_size[0]-1)
+        c = c + (input_size[1] - new_cols) // 2
+    else:
+        new_rows = (image_size[0] * input_size[1]) // image_size[1]  # 266
+        r = torch.clamp_max(new_rows / 2.0 * (1 - scale_y), new_rows-1)
+        c = torch.clamp_max(input_size[1] / 2.0 * (1 + scale_x), input_size[1]-1)
+        r = r + (input_size[0] - new_rows) // 2
+    point = torch.cat((c.unsqueeze(1), r.unsqueeze(1)), dim=1)  # (B, 2): (x, y)
+    return point
+
+
+def norm_fix(fixation, input_size):
+    fix_norm = fixation.clone()
+    fix_norm[:, 0] /= input_size[1]  # x / w
+    fix_norm[:, 1] /= input_size[0]  # y / h
+    return fix_norm
 
 
 def padding_inv(pred, shape_r, shape_c):
