@@ -70,7 +70,7 @@ class SAC(object):
             else:
                 print("When automatic entropy, at least one policy is Gaussian!")
                 raise ValueError
-            self.target_entropy = dim_entropy
+            self.target_entropy = - dim_entropy
             self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
             self.alpha_optim = Adam([self.log_alpha], lr=cfg.lr)
         else:
@@ -158,8 +158,8 @@ class SAC(object):
         min_qf_pi = torch.min(qf1_pi, qf2_pi)
 
         # actor loss
-        # actor_loss = ((self.alpha * log_pi) - min_qf_pi).mean() # Jπ = 𝔼st∼D,εt∼N[α * logπ(f(εt;st)|st) − Q(st,f(εt;st))]
-        actor_loss = - min_qf_pi.mean()
+        actor_loss = ((self.alpha * log_pi) - min_qf_pi).mean() # Jπ = 𝔼st∼D,εt∼N[α * logπ(f(εt;st)|st) − Q(st,f(εt;st))]
+        # actor_loss = - min_qf_pi.mean()
 
         # compute the early anticipation loss
         score_pred = 0.5 * (mean_acc + 1.0).squeeze(1)  # (B,)

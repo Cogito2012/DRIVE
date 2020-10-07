@@ -26,7 +26,7 @@ SAC:
   dim_action_fix: 2
   type_acc: "Gaussian"
   type_fix: "Gaussian"
-  target_update_interval: 1000
+  target_update_interval: 1
   automatic_entropy_tuning: true
   alpha: 0.001
   beta_accident: 1.0
