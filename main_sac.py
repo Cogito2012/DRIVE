@@ -221,7 +221,6 @@ def test_all(testdata_loader, env, agent):
         state = env.set_data(video_data, coord_data, data_info)
 
         # init vars before each episode
-        pred_scores, pred_masks, gt_masks = [], [], []
         rnn_state = (torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device),
                         torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device))
         score_pred = np.zeros((cfg.ENV.batch_size, env.max_steps), dtype=np.float32)
@@ -237,7 +236,7 @@ def test_all(testdata_loader, env, agent):
             score_pred[:, i_steps] = info['pred_score'].cpu().numpy()  # shape=(B,)
             fixation_pred[:, i_steps] = info['pred_fixation'].cpu().numpy()  # shape=(B, 2)
             next_step = env.cur_step if i_steps != env.max_steps - 1 else env.cur_step - 1
-            fixation_gt[:, i_steps] = env.points[:, next_step*env.step_size, :].cpu().numpy()
+            fixation_gt[:, i_steps] = env.coord_data[:, next_step*env.step_size, :].cpu().numpy()
             # next step
             i_steps += 1
 
@@ -278,7 +277,7 @@ def test():
         testdata_loader = setup_dataloader(cfg.ENV, isTraining=False)
 
         # AgentENV
-        agent = SAC(env.mask_size, env.output_shape, cfg.SAC, device=cfg.device)
+        agent = SAC(cfg.SAC, device=cfg.device)
 
         # load agent models (by default: the last epoch)
         ckpt_dir = os.path.join(cfg.output, 'checkpoints')
