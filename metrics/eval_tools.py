@@ -23,71 +23,73 @@ def draw_pr_curves(precisions, recalls, time_to_accidents, legend_text, vis_file
     plt.savefig(vis_file)
 
 
-def compute_metrics(preds_eval, all_labels, time_of_accidents, thresolds):
+def compute_metrics(preds_eval, all_labels, frame_of_accidents, thresolds):
 
     Precision = np.zeros((len(thresolds)))
     Recall = np.zeros((len(thresolds)))
     Time = np.zeros((len(thresolds)))
-    cnt = 0
-    for Th in thresolds:
-        Tp = 0.0
-        Tp_Fp = 0.0
-        Tp_Tn = 0.0
+    for cnt, Th in enumerate(thresolds):
+        num_tp, num_fp, num_tn, num_fn = 0.0, 0.0, 0.0, 0.0
         time = 0.0
-        counter = 0.0  # number of TP videos
+        counter = 0.0 
         # iterate each video sample
         for i in range(len(preds_eval)):
-            # true positive frames: (pred->1) * (gt->1)
-            tp =  np.where(preds_eval[i]*all_labels[i]>=Th)
-            Tp += float(len(tp[0])>0)
-            if float(len(tp[0])>0) > 0:
-                # if at least one TP, compute the relative (1 - rTTA)
-                time += tp[0][0] / float(time_of_accidents[i])
-                counter = counter+1
-            # all positive frames
-            Tp_Fp += float(len(np.where(preds_eval[i]>=Th)[0])>0)
-        if Tp_Fp == 0:  # predictions of all videos are negative
+            pred_bins = (preds_eval[i] >= Th).astype(int)
+            inds_pos = np.where(pred_bins>0)[0]
+            if all_labels[i] > 0:
+                num_tp += len(inds_pos)  # true positives
+                num_fn += len(pred_bins) - len(inds_pos)  # false negatives
+                # time-to-accident evaluation (only true positive video is considered!)
+                if len(inds_pos) > 0:
+                    time += max(frame_of_accidents[i] - inds_pos[0], 0)  # accumulate #frames (tta) for all pos videos
+                    counter += 1  # number of TP videos
+            else:
+                num_fp += len(inds_pos)  # false positives
+                num_tn += len(pred_bins) - len(inds_pos)  # true negatives
+        # fix invalid counting
+        if num_tp + num_fp == 0:  # predictions of all videos are negatives
             continue
         else:
-            Precision[cnt] = Tp/Tp_Fp
-        if np.sum(all_labels) ==0: # gt of all videos are negative
+            Precision[cnt] = num_tp / (num_tp + num_fp)
+        if num_tp + num_fn ==0:   # gt of all videos are negatives
             continue
         else:
-            Recall[cnt] = Tp/np.sum(all_labels)
-        if counter == 0:
+            Recall[cnt] = num_tp / (num_tp + num_fn)
+        if counter == 0:  # no true positives
             continue
         else:
-            Time[cnt] = (1-time/counter)
-        cnt += 1
+            Time[cnt] = time / counter  # average TTA (frames) per-video
     return Precision, Recall, Time
+
 
 def evaluation_accident(all_pred, all_labels, time_of_accidents, fps=30.0):
     """
-    :param: all_pred (N x T), where N is number of videos, T is the number of frames for each video
-    :param: all_labels (N,)
-    :param: time_of_accidents (N,) int element
-    :output: AP (average precision, AUC), mTTA (mean Time-to-Accident), TTA@R80 (TTA at Recall=80%)
+    :param: all_pred (N x F), where N is number of videos, F is the number of frames for each video, values range [0, 1]
+    :param: all_labels (N,), values \in {0, 1}
+    :param: time_of_accidents (N,) value range [0, T] where T is with seconds, i.e., 5, or -1 for negatives
+    :param: fps, frames_per_seconds, scalar
     """
 
-    preds_eval = []
-    min_pred = np.inf
-    # n_frames = 0
+    preds_eval, frame_of_accidents = [], []
     for idx, toa in enumerate(time_of_accidents):
         if all_labels[idx] > 0:
-            pred = all_pred[idx, :int(toa)]  # positive video
+            foa = int(toa * fps)
+            pred = all_pred[idx, :foa]  # positive video
         else:
             pred = all_pred[idx, :]  # negative video
-        # find the minimum prediction
-        min_pred = np.min(pred) if min_pred > np.min(pred) else min_pred
+            foa = -1
         preds_eval.append(pred)
-        # n_frames += len(pred)
+        frame_of_accidents.append(foa)
     total_seconds = all_pred.shape[1] / fps
 
     # compute precision, recall, and tta for each threshold
-    thresolds = np.arange(max(min_pred, 0), 1.0, 0.001)
-    Precision, Recall, Time = compute_metrics(preds_eval, all_labels, time_of_accidents, thresolds)
+    # thresolds = np.arange(min(max(min_pred, 0), 0.001), 1.0, 0.001)
+    thresolds = np.arange(0, 1.1, 0.1)  # 9-points thresholds
+    thresolds[0] += 1e-6
+    thresolds[-1] -= 1e-6
+    Precision, Recall, Time = compute_metrics(preds_eval, all_labels, frame_of_accidents, thresolds)
     # when threshold=0.5
-    p05, r05, t05 = compute_metrics(preds_eval, all_labels, time_of_accidents, [0.5])
+    p05, r05, t05 = compute_metrics(preds_eval, all_labels, frame_of_accidents, [0.5])
 
     # sort the metrics with recall (ascending)
     new_index = np.argsort(Recall)
@@ -96,7 +98,7 @@ def evaluation_accident(all_pred, all_labels, time_of_accidents, fps=30.0):
     Time = Time[new_index]
     # unique the recall, and fetch corresponding precisions and TTAs
     _,rep_index = np.unique(Recall,return_index=1)
-    rep_index = rep_index[1:]
+    rep_index = rep_index[1:] if len(rep_index) > 1 else rep_index
     new_Time = np.zeros(len(rep_index))
     new_Precision = np.zeros(len(rep_index))
     for i in range(len(rep_index)-1):
@@ -114,12 +116,12 @@ def evaluation_accident(all_pred, all_labels, time_of_accidents, fps=30.0):
         AP += (new_Precision[i-1]+new_Precision[i])*(new_Recall[i]-new_Recall[i-1])/2
 
     # transform the relative mTTA to seconds
-    mTTA = np.mean(new_Time) * total_seconds
+    mTTA = np.mean(new_Time) / fps
     sort_time = new_Time[np.argsort(new_Recall)]
     sort_recall = np.sort(new_Recall)
-    TTA_R80 = sort_time[np.argmin(np.abs(sort_recall-0.8))] * total_seconds
+    TTA_R80 = sort_time[np.argmin(np.abs(sort_recall-0.8))] / fps
 
-    return AP, mTTA, TTA_R80, p05[0], r05[0], t05[0] * total_seconds
+    return AP, mTTA, TTA_R80, p05[0], r05[0], t05[0] / fps
 
 
 def evaluation_fixation(pred_fixations, gt_fixations, metric='mse'):

@@ -32,6 +32,8 @@ def parse_configs():
                         help='Configuration file for SAC algorithm.')
     parser.add_argument('--phase', default='train', choices=['train', 'test'],
                         help='Training or testing phase.')
+    parser.add_argument('--baseline', default='none', choices=['random', 'all_pos', 'all_neg', 'none'],
+                        help='setup baseline results for testing comparison')
     parser.add_argument('--seed', type=int, default=123, metavar='N',
                         help='random seed (default: 123)')
     parser.add_argument('--num_epoch', type=int, default=50, metavar='N',
@@ -291,6 +293,18 @@ def test():
 
     # evaluate the results
     FPS = 30/cfg.ENV.frame_interval
+    B, T = all_pred_scores.shape
+    if cfg.baseline != 'none':
+        print('---- Reporting baseline methods: ')
+        all_pred_fixations = np.concatenate((np.random.randint(0, cfg.ENV.input_shape[0], (B, T, 1)), 
+                                             np.random.randint(0, cfg.ENV.input_shape[0], (B, T, 1))), axis=-1)
+    if cfg.baseline == 'random':
+        all_pred_scores = np.random.random_sample((B, T))
+    elif cfg.baseline == 'all_pos':
+        all_pred_scores = np.ones((B, T), dtype=np.float32)
+    elif cfg.baseline == 'all_neg':
+        all_pred_scores = np.zeros((B, T), dtype=np.float32)
+    
     AUC_video, AUC_frame = evaluation_auc_scores(all_pred_scores, all_gt_labels, all_toas, FPS, video_len=5)
     print("v-AUC=%.5f, f-AUC=%.5f\n"%(AUC_video, AUC_frame))
 
