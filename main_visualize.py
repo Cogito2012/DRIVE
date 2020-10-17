@@ -2,6 +2,11 @@ import os, cv2
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
+from src.saliency.mlnet import MLNet
+import torch
+from torchvision import transforms
+from src.data_transform import ProcessImages, ProcessFixations
+from src.TorchFovea import TorchFovea
 
 
 def read_frames_from_videos(root_path, vid_name, start, end, phase='testing', interval=1):
@@ -17,6 +22,7 @@ def read_frames_from_videos(root_path, vid_name, start, end, phase='testing', in
         ret, frame = cap.read()
         assert ret, "read video failed! file: %s frame: %d"%(video_path, fid)
         video_data.append(frame)
+    video_data = np.array(video_data)
     return video_data
 
 def create_curve_video(pred_scores, toa, n_frames, frame_interval):
@@ -58,6 +64,13 @@ def create_curve_video(pred_scores, toa, n_frames, frame_interval):
 
 
 def create_heatmap(frame, fixation, color):
+    # get bottom-up attention
+    input_data = data_trans(np.expand_dims(frame, axis=0))
+    with torch.no_grad():
+        saliency_bu = salmodel(torch.FloatTensor(input_data).to(device))  # (B, 1, H, W)
+        saliency_bu = saliency_bu.squeeze(0).squeeze(0).cpu().numpy()
+    saliency_bu = up_padding(saliency_bu)
+
     # calculate grid
     step_r = int(image_size[0] / mask_size[0])
     start_r, end_r = int(step_r * fixation[0]), int(step_r * (fixation[0]+1))
@@ -70,20 +83,82 @@ def create_heatmap(frame, fixation, color):
     return frame
 
 
+def generate_attention(frame_data, data_trans, salmodel, fovealmodel, fixations, image_size, rho=0.5, device=None):
+    # get bottom-up attention
+    input_data = torch.FloatTensor(data_trans(frame_data)).to(device)
+    fixation_data = torch.from_numpy(fixations).to(device)
+    foveal_data = fovealmodel.foveate(input_data, fixation_data)
+    with torch.no_grad():
+        saliency_bu = salmodel(input_data)
+        saliency_td = salmodel(foveal_data)
+    saliency_bu = saliency_bu.squeeze(1).cpu().numpy()
+    saliency_td = saliency_td.squeeze(1).cpu().numpy()
+    saliency = (1 - rho) * saliency_bu + rho * saliency_td
+    # padd the saliency maps to image size
+    attention_maps = saliency_padding(saliency, image_size)
+    return attention_maps
+
+
+def saliency_padding(saliency, image_size):
+    """Up padding the saliency (B, 60, 80) to image size (B, 330, 792)
+    """
+    # get size and ratios
+    height, width = saliency.shape[1:]
+    rows_rate = image_size[0] / height  # h ratio (5.5)
+    cols_rate = image_size[1] / width   # w ratio (9.9)
+    # padding
+    if rows_rate > cols_rate:
+        pass
+    else:
+        new_rows = (image_size[0] * width) // image_size[1]
+        patch_ctr = saliency[:, ((height - new_rows) // 2):((height - new_rows) // 2 + new_rows), :]
+        patch_ctr = np.rollaxis(patch_ctr, 0, 3)
+        padded = cv2.resize(patch_ctr, (image_size[1], image_size[0]))
+        padded = np.rollaxis(padded, 2, 0)
+    return padded
+
+
+def fixation_padding(fixation, height, width, image_size):
+    """Up padding the fixations (B, 2) defined in (height, width)=(480, 640) to image size (330, 792)
+    """
+    # get size and ratios
+    rows_rate = image_size[0] / height  # h ratio (5.5)
+    cols_rate = image_size[1] / width   # w ratio (9.9)
+    # padding
+    if rows_rate > cols_rate:
+        pass
+    else:
+        new_rows = (image_size[0] * width) // image_size[1]
+        fixation_shifted[1] = fixation[1] - (self.height - new_rows) // 2
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Visualize Results')
     # For training and testing
     parser.add_argument('--data_path', default="data/DADA-2000-small",
                         help='Configuration file for SAC algorithm.')
-    parser.add_argument('--test_results', default='output/SAC_GG_v3/eval/results.npz',
+    parser.add_argument('--sal_ckpt', default='models/saliency/mlnet_25.pth',
+                        help='Pretrained model for bottom-up saliency prediciton.')
+    parser.add_argument('--test_results', default='output/SAC_GG_v4/eval/results.npz',
                         help='Result file of testing data.')
-    parser.add_argument('--output', default='./output/SAC_GG_v3',
+    parser.add_argument('--output', default='./output/SAC_GG_v4',
                         help='Directory of the output. ')
     args = parser.parse_args()
     frame_interval = 5
     image_size = [330, 792]
-    mask_size = [5, 12]
     height, width = 480, 640
+
+    # environmental model
+    device = torch.device("cuda:0")
+    observe_model = MLNet((height, width))
+    assert os.path.exists(args.sal_ckpt), "Checkpoint directory does not exist! %s"%(args.sal_ckpt)
+    ckpt = torch.load(args.sal_ckpt)
+    observe_model.load_state_dict(ckpt['model'])
+    observe_model.to(device)
+    observe_model.eval()
+    fovealmodel = TorchFovea((height, width), min(height, width)/6.0, level=5, factor=2, device=device)
+    # transform
+    data_trans = transforms.Compose([ProcessImages((height, width), mean=[0.218, 0.220, 0.209], std=[0.277, 0.280, 0.277])])
 
     if not os.path.exists(args.test_results):
         print('Results file not found!')
@@ -93,7 +168,7 @@ if __name__ == "__main__":
             save_dict['pred_scores'], save_dict['gt_labels'], save_dict['pred_fixations'], save_dict['gt_fixations'], save_dict['toas'], save_dict['vids']
 
     # prepare output directory
-    output_dir = os.path.join(args.output, 'vis')
+    output_dir = os.path.join(args.output, 'vis-bu')
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     
@@ -116,20 +191,24 @@ if __name__ == "__main__":
 
         print("accident ID=%d, video ID=%d"%(accid, vid))
         
+        # read frames
         frames = read_frames_from_videos(args.data_path, vidname, start, end, phase='testing', interval=5)
-
+        # create curves
         curve_frames = create_curve_video(pred_scores, toa, len(frames), frame_interval)
+        # get saliency maps
+        attention_maps = generate_attention(frames, data_trans, observe_model, fovealmodel, pred_fixations, image_size, rho=0.0, device=device)
 
         vis_file = os.path.join(output_dir, 'vis_%d_%03d.avi'%(accid, vid))
         video_writer = cv2.VideoWriter(vis_file, cv2.VideoWriter_fourcc(*'DIVX'), 2.0, (image_size[1], image_size[0]))
 
         for t, frame in enumerate(frames):
             # add pred_mask as heatmap
-            # predicted
-            frame = create_heatmap(frame, pred_fixations[t], color=cv2.COLORMAP_JET)
+            heatmap = cv2.applyColorMap((attention_maps[t] * 255).astype(np.uint8), cv2.COLORMAP_JET)
+            frame = cv2.addWeighted(frame, 0.5, heatmap, 0.5, 0)
             if gt_fixations[t, 0] > 0 and gt_fixations[t, 1] > 0:
                 # ground truth
-                frame = create_heatmap(frame, gt_fixations[t], color=cv2.COLORMAP_AUTUMN)
+                # fix_gt = fixation_padding(gt_fixations[t, 1], height, width, image_size)
+                pass
 
             # add curve
             curve_img = curve_frames[t]

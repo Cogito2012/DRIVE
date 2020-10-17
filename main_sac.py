@@ -22,7 +22,7 @@ from torch.utils.tensorboard import SummaryWriter
 from src.enviroment import DashCamEnv
 from RLlib.SAC.sac import SAC
 from RLlib.SAC.replay_buffer import ReplayMemory, ReplayMemoryGPU
-from metrics.eval_tools import evaluation_accident, evaluation_fixation, evaluation_auc_scores
+from metrics.eval_tools import evaluation_accident, evaluation_fixation, evaluation_auc_scores, evaluation_accident_new, evaluate_earliness
 
 
 def parse_configs():
@@ -305,15 +305,21 @@ def test():
     elif cfg.baseline == 'all_neg':
         all_pred_scores = np.zeros((B, T), dtype=np.float32)
     
-    AUC_video, AUC_frame = evaluation_auc_scores(all_pred_scores, all_gt_labels, all_toas, FPS, video_len=5)
-    print("v-AUC=%.5f, f-AUC=%.5f\n"%(AUC_video, AUC_frame))
+    mTTA = evaluate_earliness(all_pred_scores, all_gt_labels, all_toas, fps=FPS, thresh=0.5)
+    print("\n[Earliness] mTTA@0.5 = %.4f seconds."%(mTTA))
 
-    AP, mTTA, TTA_R80, p05, r05, t05 = evaluation_accident(all_pred_scores, all_gt_labels, all_toas, fps=FPS)
-    print("AP = %.4f, mean TTA = %.4f, TTA@0.8 = %.4f"%(AP, mTTA, TTA_R80))
-    print("\nprecision@0.5 = %.4f, recall@0.5 = %.4f, TTA@0.5 = %.4f\n"%(p05, r05, t05))
+    AP, p05, r05 = evaluation_accident_new(all_pred_scores, all_gt_labels, all_toas, fps=FPS)
+    print("[Correctness] AP = %.4f, precision@0.5 = %.4f, recall@0.5 = %.4f"%(AP, p05, r05))
+
+    AUC_video, AUC_frame = evaluation_auc_scores(all_pred_scores, all_gt_labels, all_toas, FPS, video_len=5, pos_only=True)
+    print("[Correctness] v-AUC = %.5f, f-AUC = %.5f"%(AUC_video, AUC_frame))
+
+    # AP, mTTA, TTA_R80, p05, r05, t05 = evaluation_accident(all_pred_scores, all_gt_labels, all_toas, fps=FPS)
+    # print("AP = %.4f, mean TTA = %.4f, TTA@0.8 = %.4f"%(AP, mTTA, TTA_R80))
+    # print("\nprecision@0.5 = %.4f, recall@0.5 = %.4f, TTA@0.5 = %.4f\n"%(p05, r05, t05))
     
     mse_fix = evaluation_fixation(all_pred_fixations, all_gt_fixations)
-    print('Fixation Prediction MSE=%.4f'%(mse_fix))
+    print('[Attentiveness] Fixation MSE = %.4f\n'%(mse_fix))
 
 
 if __name__ == "__main__":
