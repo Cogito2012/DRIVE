@@ -4,6 +4,7 @@ source activate pyRL
 
 PHASE=$1
 GPU_IDS=$2
+OUTPUT=$3
 
 LOG_DIR="./logs/i3d"
 if [ ! -d $LOG_DIR ]; then
@@ -20,13 +21,13 @@ case ${PHASE} in
     # run training
     CUDA_VISIBLE_DEVICES=$GPU_IDS python main_i3d.py \
         --phase train \
-        --batch_size 1 \
+        --batch_size 12 \
         --input_shape 224 224 \
         --num_workers 4 \
         --epoch 50 \
         --gpus $GPU_IDS \
         --train_all \
-        --output ./output_dev/I3D_all
+        --output ./output/$OUTPUT
     ;;
   test)
     # run testing

@@ -13,10 +13,12 @@ import torchvision.transforms as transforms
 from tensorboardX import SummaryWriter
 import numpy as np
 from tqdm import tqdm
+import random
 
 from src.I3D import InceptionI3d
-from src.DADALoader import DADALoader
-from src.data_transform import ProcessImages, ProcessFixations
+from src.DADA2KS import DADA2KS
+from src.data_transform import ProcessImages
+from sklearn.metrics import roc_auc_score
 
 
 def set_deterministic(seed):
@@ -24,101 +26,55 @@ def set_deterministic(seed):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)  # if you are using multi-GPU.
     np.random.seed(seed)  # Numpy module.
-    # random.seed(seed)  # Python random module.
+    random.seed(seed)  # Python random module.
     torch.manual_seed(seed)
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = True
 
 
 def setup_dataloader(cfg, isTraining=True):
-    transform_dict = {'image': transforms.Compose([ProcessImages(cfg.input_shape)]),
-                      'fixpt': transforms.Compose([ProcessFixations(cfg.input_shape, [660, 1584])])}
-    params_norm = {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}
-
+    transform_dict = {'image': transforms.Compose([ProcessImages(cfg.input_shape, mean=[0.218, 0.220, 0.209], std=[0.277, 0.280, 0.277])]), 'focus': None, 'fixpt': None}
     # testing dataset
     if not isTraining:
-        test_data = DADALoader(cfg.data_path, 'testing', interval=1, max_frames=-1, 
-                                transforms=transform_dict, params_norm=params_norm, use_focus=False, cls_task=True)
-        testdata_loader = DataLoader(dataset=test_data, batch_size=1, shuffle=False, num_workers=cfg.num_workers, pin_memory=True)
+        test_data = DADA2KS(cfg.data_path, 'testing', interval=cfg.frame_interval, transforms=transform_dict, use_focus=False, use_fixation=False)
+        testdata_loader = DataLoader(dataset=test_data, batch_size=cfg.batch_size, shuffle=False, drop_last=True, num_workers=0, pin_memory=True)
         print("# test set: %d"%(len(test_data)))
-        return testdata_loader
+        return testdata_loader, test_data.num_classes
 
     # training dataset
-    train_data = DADALoader(cfg.data_path, 'training', interval=cfg.frame_interval, max_frames=cfg.max_frames, 
-                            transforms=transform_dict, params_norm=params_norm, use_focus=False, cls_task=True)
-    traindata_loader = DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, pin_memory=True)
-    accident_classes = train_data.accident_classes
+    train_data = DADA2KS(cfg.data_path, 'training', interval=cfg.frame_interval, transforms=transform_dict, use_focus=False, use_fixation=False)
+    traindata_loader = DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, drop_last=True, num_workers=cfg.num_workers, pin_memory=True)
 
     # validataion dataset
-    eval_data = DADALoader(cfg.data_path, 'validation', interval=cfg.frame_interval, max_frames=cfg.max_frames, 
-                            transforms=transform_dict, params_norm=params_norm, use_focus=False, cls_task=True)
-    evaldata_loader = DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers, pin_memory=True)
+    eval_data = DADA2KS(cfg.data_path, 'validation', interval=cfg.frame_interval, transforms=transform_dict, use_focus=False, use_fixation=False)
+    evaldata_loader = DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, drop_last=True, num_workers=cfg.num_workers, pin_memory=True)
     print("# train set: %d, eval set: %d"%(len(train_data), len(eval_data)))
 
-    return traindata_loader, evaldata_loader, accident_classes
+    return traindata_loader, evaldata_loader, train_data.num_classes
 
 
-def pre_process(data_batch, classes, len_seg=16):
-    # video_data: (B, T, 3, H, W)
-    # focus_data: empty
-    # coord_data: (B, T, 3)
-    # data_info: (B, 5)
-    # return: data_input: (B, 3, 16, H, W), label_input: (B, 1)
-    video_data, _, coord_data, data_info = data_batch
-    video_data = video_data.to(torch.float32)
-    data_input, label_input, logits = [], [], []
-    for i, (video, coord, info) in enumerate(zip(video_data, coord_data, data_info)):
-        # trim the video
-        begin_frame = torch.nonzero(coord[:, 2] > 0)[0, 0]
-        end_frame = torch.nonzero(coord[:, 2] > 0)[-1, 0]
-        # uniform sampling (no matter how many frames provided)
-        inds = np.linspace(begin_frame, end_frame, len_seg).astype(np.int32)
-        trimed_pos1 = video[inds].permute([1, 0, 2, 3]).unsqueeze(0)  # (1, 3, 16, H, W)
-        # center cropping
-        inds_ctr = int((begin_frame + end_frame) * 0.5)
-        start = max(begin_frame, inds_ctr-int(len_seg / 2.0))
-        end = min(inds_ctr+int(len_seg / 2.0), end_frame)
-        inds = np.linspace(start, end, len_seg).astype(np.int32)
-        trimed_pos2 = video[inds].permute([1, 0, 2, 3]).unsqueeze(0)
-        if args.with_nonaccident:
-            # sample negative
-            if begin_frame - len_seg >= 0:
-                # sampling negative at early section
-                trimed_neg = video[begin_frame - len_seg: begin_frame].permute([1, 0, 2, 3]).unsqueeze(0)  # (1, 3, 16, H, W)
-            elif end_frame + len_seg < video.size(0):
-                # sampling negative at later section
-                trimed_neg = video[end_frame + 1: end_frame + len_seg + 1].permute([1, 0, 2, 3]).unsqueeze(0)
-            else:
-                trimed_neg = torch.zeros_like(trimed_pos1)
-            sample = torch.cat([trimed_pos1, trimed_pos2, trimed_neg], dim=0)
-            # process label
-            logit_pos = torch.Tensor([classes.index(str(int(info[0].item()))) + 1]).long()
-            logit_neg = torch.zeros_like(logit_pos)
-            logit = torch.cat([logit_pos.unsqueeze(0), logit_pos.unsqueeze(0), logit_neg.unsqueeze(0)], dim=0)
-            # onehot labels
-            onehot_pos = torch.zeros((len(classes)+1))
-            onehot_pos[logit_pos] = 1
-            onehot_neg = torch.zeros((len(classes)+1))
-            onehot_neg[0] = 1
-            onehot_labels = torch.cat([onehot_pos.unsqueeze(0), onehot_pos.unsqueeze(0), onehot_neg.unsqueeze(0)], dim=0)
+def setup_i3d(num_classes, weight='i3d_rgb_charades.pt', device=torch.device('cuda')):
+    """Setup I3D model"""
+    i3d = InceptionI3d(157, in_channels=3)  # load the layers before Mixed_5c
+    assert os.path.exists(weight), "I3D weight file does not exist! %s"%(weight)
+    i3d.load_state_dict(torch.load(weight))
+    i3d.replace_logits(num_classes) 
+    i3d.to(device)
+    i3d = nn.DataParallel(i3d)
+    # fix parameters before Mixed_5 block
+    for p in i3d.parameters():
+        p.requires_grad = False
+    for p_name, p_obj in i3d.named_parameters():
+        if not args.train_all:
+            # fine tune training
+            if 'Mixed_5' in p_name:
+                p_obj.requires_grad = True
+            elif 'Logits' in p_name:
+                p_obj.requires_grad = True
         else:
-            sample = torch.cat([trimed_pos1, trimed_pos2], dim=0)
-            # process label
-            logit_pos = torch.Tensor([classes.index(str(int(info[0].item())))]).long()
-            logit = torch.cat([logit_pos.unsqueeze(0), logit_pos.unsqueeze(0)], dim=0)
-            # onehot labels
-            onehot_pos = torch.zeros((len(classes)))
-            onehot_pos[logit_pos] = 1
-            onehot_labels = torch.cat([onehot_pos.unsqueeze(0), onehot_pos.unsqueeze(0)], dim=0)
-
-        data_input.append(sample)  # (3, 3, 16, H, W))
-        logits.append(logit)
-        label_input.append(onehot_labels)
-
-    # prepare the input
-    data_input = torch.cat(data_input, dim=0)
-    label_input = torch.cat(label_input, dim=0)
-    return data_input, label_input, logits
+            # train all layers
+            p_obj.requires_grad = True
+    return i3d
 
 
 def train():
@@ -133,48 +89,32 @@ def train():
     TBlogger = SummaryWriter(tb_dir)
     
     # setup dataset loader
-    traindata_loader, evaldata_loader, accident_classes = setup_dataloader(args, isTraining=True)
-    num_classes = len(accident_classes) + 1  if args.with_nonaccident else len(accident_classes)  # we add the background class (ID=0)
+    traindata_loader, evaldata_loader, num_classes = setup_dataloader(args, isTraining=True)
 
     # I3D model
-    i3d = InceptionI3d(157, in_channels=3)  # load the layers before Mixed_5c
-    assert os.path.exists(args.pretrained_i3d), "I3D weight file does not exist! %s"%(args.pretrained_i3d)
-    i3d.load_state_dict(torch.load(args.pretrained_i3d))
-    i3d.replace_logits(num_classes) 
-    i3d.to(device)
-    i3d = nn.DataParallel(i3d)
+    i3d = setup_i3d(num_classes, weight=args.pretrained_i3d, device=device)
     i3d.train()
-    # fix parameters before Mixed_5 block
-    for p in i3d.parameters():
-        p.requires_grad = False
-    for p_name, p_obj in i3d.named_parameters():
-        if not args.train_all:
-            # fine tune training
-            if 'Mixed_5' in p_name:
-                p_obj.requires_grad = True
-            elif 'Logits' in p_name:
-                p_obj.requires_grad = True
-        else:
-            # train all layers
-            p_obj.requires_grad = True
+
     # optimizer
-    optimizer = optim.SGD(filter(lambda p: p.requires_grad, i3d.parameters()), lr=args.learning_rate, momentum=0.9, weight_decay=0.0000001)
-    lr_sched = optim.lr_scheduler.MultiStepLR(optimizer, [30, 40])
+    optimizer = optim.SGD(filter(lambda p: p.requires_grad, i3d.parameters()), lr=args.learning_rate, momentum=0.9, weight_decay=1e-5)
+    lr_sched = optim.lr_scheduler.MultiStepLR(optimizer, [20, 40])
+    # optimizer = optim.Adam(filter(lambda p: p.requires_grad, i3d.parameters()), lr=args.learning_rate, weight_decay=1e-5)
     optimizer.zero_grad()
 
     steps = 0  # total number of gradient steps
     avg_loss = 0  # moving average loss
     for k in range(args.epoch):
         i3d.train()
-        for i, data_batch in tqdm(enumerate(traindata_loader), total=len(traindata_loader), desc="Epoch %d [train]"%(k)):
-            # data_input, label_target, _ = pre_process(data_batch, accident_classes)
-            data_input, label_target, _ = data_batch
-            data_input = Variable(data_input).to(device)
-            label_target = Variable(label_target).to(device)
+        for i, (video_data, _, _, data_info) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), 
+                                                                                     desc='Epoch: %d / %d'%(k + 1, args.epoch)):  # (B, T, H, W, C)
+            data_input = Variable(video_data.permute(0, 2, 1, 3, 4)).to(device, non_blocking=True)  # (B, 3, T, H, W)
+            label_onehot = torch.zeros(args.batch_size, num_classes)
+            label_onehot.scatter_(1, data_info[:, 4].unsqueeze(1).long(), 1)  # one-hot, (B, 2)
+            label_onehot = Variable(label_onehot).to(device, non_blocking=True)
             # run forward
             predictions = i3d(data_input)
             # compute classification loss (with max-pooling along time B x C x T)
-            cls_loss = F.binary_cross_entropy_with_logits(torch.max(predictions, dim=2)[0], label_target)
+            cls_loss = F.binary_cross_entropy_with_logits(torch.max(predictions, dim=2)[0], label_onehot)
             loss = cls_loss / args.num_steps
             loss.backward()
             avg_loss += loss.item()
@@ -182,60 +122,98 @@ def train():
             if (k * len(traindata_loader) + i + 1) % args.num_steps == 0:
                 optimizer.step()
                 optimizer.zero_grad()
-                lr_sched.step()
                 TBlogger.add_scalar('loss/train', avg_loss, steps)
-                steps += 1
+                steps += args.num_steps
                 avg_loss = 0  # moving average
+        lr_sched.step()
+        TBlogger.add_scalar('learning_rate', lr_sched.get_last_lr(), k)
 
-        # save model for each epoch
-        model_file = os.path.join(ckpt_dir, 'i3d_accident_%02d.pth'%(k+1))
-        torch.save({'model': i3d.module.state_dict() if len(gpu_ids) > 1 else i3d.state_dict(), 
-                    'optimizer': optimizer.state_dict()}, model_file)
+        # save model for this epoch
+        if (k+1) % args.snapshot_steps == 0:
+            model_file = os.path.join(ckpt_dir, 'i3d_accident_%02d.pth'%(k+1))
+            torch.save({'model': i3d.module.state_dict() if len(gpu_ids) > 1 else i3d.state_dict(), 
+                        'optimizer': optimizer.state_dict()}, model_file)
                     
         # testing
         i3d.eval()
-        # all_preds, all_labels = [], []
         val_loss = 0
+        # all_preds, all_labels = [], []
         with torch.no_grad():
-            for i, data_batch in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), desc="Epoch %d [eval]"%(k)):
-                # data_input, label_target, logits = pre_process(data_batch, accident_classes)
-                data_input, label_target, _ = data_batch
-                data_input = data_input.to(device)
-                label_target = label_target.to(device)
+            for i, (video_data, _, _, data_info) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), 
+                                                                                    desc='Epoch: %d / %d'%(k + 1, args.epoch)):  # (B, T, H, W, C)
+                data_input = video_data.permute(0, 2, 1, 3, 4).to(device, non_blocking=True)  # (B, T, 3, H, W)
+                label_onehot = torch.zeros(args.batch_size, num_classes)
+                label_onehot.scatter_(1, data_info[:, 4].unsqueeze(1).long(), 1)  # one-hot
+                label_onehot = label_onehot.to(device, non_blocking=True)
                 # run forward
                 predictions = i3d(data_input)
-                # logits_pred = torch.argmax(predictions.squeeze(-1), dim=1, keepdim=True)
                 # validation loss
-                cls_loss = F.binary_cross_entropy_with_logits(torch.max(predictions, dim=2)[0], label_target)
+                cls_loss = F.binary_cross_entropy_with_logits(torch.max(predictions, dim=2)[0], label_onehot)
                 val_loss += cls_loss.item()
-                # # append results
-                # all_preds.append(logits_pred.cpu().numpy())
-                # all_labels.append(logits.numpy())
+                # # results
+                # all_preds.append(torch.max(predictions, dim=2)[0][:, 1].cpu().numpy())
+                # all_labels.append(data_info[:, 4].numpy())
         # write logging and evaluate accuracy
         val_loss /= len(evaldata_loader)
         TBlogger.add_scalar('loss/val', val_loss, (k+1) * len(traindata_loader))
-        # all_preds = np.squeeze(np.concatenate(all_preds, axis=0), axis=1)
-        # all_labels = np.squeeze(np.concatenate(all_labels, axis=0), axis=1)
+        # # accuracy
+        # all_preds = np.concatenate(all_preds)
+        # all_labels = np.concatenate(all_labels)
+        # AUC_video = roc_auc_score(all_preds, all_labels)
+        # TBlogger.add_scalar('accuracy/auc', AUC_video, (k+1) * len(traindata_loader))
 
 def test():
-    pass
+    # prepare output directory
+    output_dir = os.path.join(args.output, 'eval')
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    result_file = os.path.join(output_dir, 'results.npz')
+    if os.path.exists(result_file):
+        save_dict = np.load(result_file, allow_pickle=True)
+        all_preds, all_labels, all_vids = save_dict['preds'], save_dict['labels'], save_dict['vids']
+    else:
+        # initialize dataset
+        testdata_loader,num_classes = setup_dataloader(args, isTraining=False)
 
+        i3d = InceptionI3d(num_classes, in_channels=3)  # load the layers before Mixed_5c
+        assert os.path.exists(args.model_weights), "I3D weight file does not exist! %s"%(args.model_weights)
+        i3d.load_state_dict(torch.load(args.model_weights))
+        i3d.to(device)
+        i3d = nn.DataParallel(i3d)
 
-def evaluate():
-    pass
+        i3d.eval()
+        all_preds, all_labels, all_vids = [], [], []
+        with torch.no_grad():
+            for i, (video_data, _, _, data_info) in tqdm(enumerate(testdata_loader), total=len(testdata_loader)):  # (B, T, H, W, C)
+                data_input = video_data.permute(0, 2, 1, 3, 4).to(device, non_blocking=True)  # (B, T, 3, H, W)
+                # run forward
+                output = i3d(data_input)
+                preds = torch.softmax(torch.max(output, dim=2)[0], dim=1)
+                preds = preds[:, 1].cpu().numpy()
+                labels = data_info[:, 4].numpy()
+                vids = data_info[:, :4].numpy()
+                all_preds.append(preds)
+                all_labels.append(labels)
+                all_vids.append(vids)
+        all_preds = np.concatenate(all_preds)
+        all_labels = np.concatenate(all_labels)
+        all_vids = np.concatenate(all_vids)
+        np.savez(result_file[:-4], preds=all_preds, labels=all_labels, vids=all_vids)
+    # evaluation
+    AUC_video = roc_auc_score(all_preds, all_labels)
+    print("[Correctness] v-AUC = %.5f"%(AUC_video))
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='PyTorch I3D classification implementation')
-    parser.add_argument('--data_path', default='./data/DADA-2000',
+    parser.add_argument('--data_path', default='./data/DADA-2000-small',
                         help='The relative path of dataset.')
-    parser.add_argument('--batch_size', type=int, default=1,
+    parser.add_argument('--batch_size', type=int, default=16,
                         help='The batch size in training process. Default: 1')
-    parser.add_argument('--frame_interval', type=int, default=1,
+    parser.add_argument('--frame_interval', type=int, default=5,
                         help='The number of frames per second for each video. Default: 1')
-    parser.add_argument('--max_frames', default=-1, type=int,
-                        help='Maximum number of frames for each untrimmed video.')
-    parser.add_argument('--phase', default='train', choices=['train', 'test', 'eval'],
+    parser.add_argument('--phase', default='train', choices=['train', 'test'],
                         help='Training or testing phase.')
     parser.add_argument('--epoch', type=int, default=50,
                         help='The number of training epochs, default: 20.')
@@ -245,11 +223,11 @@ if __name__ == "__main__":
                         help='random seed (default: 123)')
     parser.add_argument('--gpus', type=str, default="0", 
                         help="The delimited list of GPU IDs separated with comma. Default: '0'.")
-    parser.add_argument('--output', default='./output_dev/I3D',
+    parser.add_argument('--output', default='./output/I3D',
                         help='Directory of the output. ')
     parser.add_argument('--num_workers', type=int, default=0, 
                         help='How many sub-workers to load dataset. Default: 0')
-    parser.add_argument('--pretrained_i3d', default='./i3d_rgb_charades.pt', 
+    parser.add_argument('--pretrained_i3d', default='models/i3d_rgb_charades.pt', 
                         help='The model weights for fine-tuning I3D RGB model.')
     parser.add_argument('--model_weights', default=None, 
                         help='The model weights for evaluation or resume training.')
@@ -258,8 +236,8 @@ if __name__ == "__main__":
                         help='The learning rate for fine-tuning.')
     parser.add_argument('--num_steps', type=int, default=10,
                         help='The number of forward steps for each gradient descent update')
-    parser.add_argument('--with_nonaccident', action='store_true',
-                        help='Include non-accident class.')
+    parser.add_argument('--snapshot_steps', type=int, default=5,
+                        help='The number of interval steps to save snapshot of trained model.')
     parser.add_argument('--train_all', action='store_true',
                         help='Whether to train all layers or finetune the model.')
     args = parser.parse_args()
@@ -277,7 +255,5 @@ if __name__ == "__main__":
         train()
     elif args.phase == 'test':
         test()
-    elif args.phase == 'eval':
-        evaluate()
     else:
         raise NotImplementedError
