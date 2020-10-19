@@ -38,6 +38,8 @@ def parse_configs():
                         help='random seed (default: 123)')
     parser.add_argument('--num_epoch', type=int, default=50, metavar='N',
                         help='number of epoches (default: 50)')
+    parser.add_argument('--snapshot_interval', type=int, default=5, metavar='N',
+                        help='The epoch interval of model snapshot (default: 5)')
     parser.add_argument('--test_epoch', type=int, default=-1, 
                         help='The snapshot id of trained model for testing.')
     parser.add_argument('--output', default='./output/SAC',
@@ -202,8 +204,9 @@ def train():
         agent.set_status('train')
         updates = train_per_epoch(traindata_loader, env, agent, cfg, writer, e, memory, updates)
 
-        # save model file for each epoch (episode)
-        agent.save_models(ckpt_dir, cfg, e + 1)
+        if (e+1) % cfg.snapshot_interval == 0:
+            # save model file for each epoch (episode)
+            agent.save_models(ckpt_dir, cfg, e + 1)
 
         # evaluate each epoch
         agent.set_status('eval')

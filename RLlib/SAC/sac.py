@@ -22,6 +22,7 @@ class SAC(object):
         self.arch_type = cfg.arch_type
         self.type_acc = cfg.type_acc
         self.type_fix = cfg.type_fix
+        self.actor_update_interval = cfg.actor_update_interval
         self.target_update_interval = cfg.target_update_interval
         self.automatic_entropy_tuning = cfg.automatic_entropy_tuning
         self.num_classes = cfg.num_classes
@@ -72,7 +73,7 @@ class SAC(object):
                 raise ValueError
             self.target_entropy = - dim_entropy
             self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
-            self.alpha_optim = Adam([self.log_alpha], lr=cfg.lr)
+            self.alpha_optim = Adam([self.log_alpha], lr=cfg.lr_alpha)
         else:
             self.alpha = 0
             self.automatic_entropy_tuning = False
@@ -206,7 +207,7 @@ class SAC(object):
             self.alpha_optim.step()
 
             # self.alpha = self.log_alpha.exp()
-            self.alpha = torch.clamp_max(self.log_alpha.exp(), 10.0)
+            self.alpha = torch.clamp_min(self.log_alpha.exp(), 0.0001)
             alpha_tlogs = self.alpha.clone() # For TensorboardX logs
 
             self.losses.update({'alpha': alpha_loss.item()})
@@ -244,10 +245,12 @@ class SAC(object):
         self.update_critic(state_batch, action_batch, reward_batch, next_state_batch, mask_batch, rnn_state_batch)
         
         # update actor and alpha
-        log_pi = self.update_actor(state_batch, rnn_state_batch, labels_batch)
+        if updates % self.actor_update_interval == 0:
+            log_pi = self.update_actor(state_batch, rnn_state_batch, labels_batch)
 
-        # update entropy term
-        alpha_tlogs = self.update_entropy(log_pi)
+            # update entropy term
+            alpha_tlogs = self.update_entropy(log_pi)
+            alpha_values = alpha_tlogs.item()
 
         # update critic target
         if updates % self.target_update_interval == 0:
@@ -257,7 +260,6 @@ class SAC(object):
         if self.arch_type == 'rae':
             self.update_decoder(state_batch, latent_lambda=self.latent_lambda)
 
-        alpha_values = alpha_tlogs.item()
         return self.losses, alpha_values
 
 
