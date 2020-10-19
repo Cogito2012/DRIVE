@@ -245,6 +245,7 @@ class SAC(object):
         self.update_critic(state_batch, action_batch, reward_batch, next_state_batch, mask_batch, rnn_state_batch)
         
         # update actor and alpha
+        alpha_values = self.alpha
         if updates % self.actor_update_interval == 0:
             log_pi = self.update_actor(state_batch, rnn_state_batch, labels_batch)
 
