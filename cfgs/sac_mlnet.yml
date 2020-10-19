@@ -6,7 +6,6 @@ ENV:
   frame_interval: 5
   step_size: 1
   len_clip: 1
-  num_workers: 4
   rho: 0.5
   fusion: "dynamic"  # static or dynamic
   fusion_margin: 0.8

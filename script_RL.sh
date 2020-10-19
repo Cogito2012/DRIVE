@@ -4,7 +4,8 @@ source activate pyRL
 
 PHASE=$1
 GPU_IDS=$2
-EXP_TAG=$3
+NUM_WORKERS=$3
+EXP_TAG=$4
 
 LOG_DIR="./logs/${EXP_TAG}"
 if [ ! -d $LOG_DIR ]; then
@@ -21,6 +22,6 @@ echo Logging output to "$LOG"
 # CUDA_VISIBLE_DEVICES=$GPU_IDS python main_reinforce.py --output ./output/${EXP_TAG} --phase ${PHASE} --config cfgs/reinforce_default.yml
 # CUDA_VISIBLE_DEVICES=$GPU_IDS python main_reinforce.py --binary_cls --alpha 0 --output ./output/REINFORCE_alpha0
 
-CUDA_VISIBLE_DEVICES=$GPU_IDS python main_sac.py --output ./output/${EXP_TAG} --phase ${PHASE} --config cfgs/sac_mlnet.yml
+CUDA_VISIBLE_DEVICES=$GPU_IDS python main_sac.py --output ./output/${EXP_TAG} --phase ${PHASE} --num_workers ${NUM_WORKERS} --config cfgs/sac_mlnet.yml
 
 echo "Done!"
