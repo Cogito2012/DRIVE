@@ -202,11 +202,18 @@ class AccidentPolicy(nn.Module):
 
 
 class FixationPolicy(nn.Module):
-    def __init__(self, dim_state, dim_action, hidden_dim, policy_type='Gaussian'):
+    def __init__(self, dim_state, dim_action, hidden_dim, dim_latent=None, arch_type='mlp', policy_type='Gaussian'):
         super(FixationPolicy, self).__init__()
+        self.arch_type = arch_type
         self.policy_type = policy_type
+        self.dim_latent = dim_latent
+        if arch_type == 'rae':
+            self.state_encoder = StateEncoder(dim_state, dim_latent)
+            self.num_inputs = dim_latent
+        else:
+            self.num_inputs = dim_state
 
-        self.linear1 = nn.Linear(dim_state, hidden_dim)
+        self.linear1 = nn.Linear(self.num_inputs, hidden_dim)
         self.linear2 = nn.Linear(hidden_dim, hidden_dim)
         self.mean_linear = nn.Linear(hidden_dim, dim_action)
         if self.policy_type == 'Gaussian':
@@ -215,11 +222,15 @@ class FixationPolicy(nn.Module):
             self.noise = torch.Tensor(dim_action)
         self.apply(weights_init_)
 
-    def forward(self, state):
+    def forward(self, state, detach=False):
         """
         state: (B, 64)
         """
-        x = F.relu(self.linear1(state))
+        if self.arch_type == 'rae':
+            x = self.state_encoder(state, detach=detach)
+        else:
+            x = state.clone()
+        x = F.relu(self.linear1(x))
         x = F.relu(self.linear2(x))
         mean = self.mean_linear(x)
         if self.policy_type == 'Gaussian':
@@ -230,8 +241,8 @@ class FixationPolicy(nn.Module):
             log_std = torch.tensor(0.0).to(mean.device)
         return mean, log_std
 
-    def sample(self, state):
-        mean, log_std = self.forward(state)
+    def sample(self, state, detach=False):
+        mean, log_std = self.forward(state, detach=detach)
         if self.policy_type == 'Gaussian':
             std = log_std.exp()
             normal = Normal(mean, std)

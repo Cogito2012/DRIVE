@@ -50,10 +50,11 @@ class SAC(object):
         self.policy_att_optim = Adam(self.policy_fixation.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
 
         if cfg.arch_type == 'rae':
-            # the encoder is shared between actor and critic, weights need to be tied
+            # the encoder is shared between two actors and critic, weights need to be tied
             self.policy_accident.state_encoder.copy_conv_weights_from(self.critic.state_encoder)
+            self.policy_fixation.state_encoder.copy_conv_weights_from(self.critic.state_encoder)
             # decoder
-            self.decoder = StateDecoder(cfg.dim_latent, self.dim_state_acc).to(device=self.device)
+            self.decoder = StateDecoder(cfg.dim_latent, self.dim_state).to(device=self.device)
             # optimizer for critic encoder for reconstruction loss
             self.encoder_optim = Adam(self.critic.state_encoder.parameters(), lr=cfg.lr)
             # optimizer for decoder
@@ -84,10 +85,13 @@ class SAC(object):
         critic = QNetwork(self.dim_state, self.dim_action, cfg.hidden_size, dim_latent=cfg.dim_latent, arch_type=cfg.arch_type).to(device=self.device)
         critic_target = QNetwork(self.dim_state, self.dim_action, cfg.hidden_size, dim_latent=cfg.dim_latent, arch_type=cfg.arch_type).to(self.device)
         # create accident anticipation policy
-        policy_accident = AccidentPolicy(self.dim_state_acc, self.dim_action_acc, cfg.hidden_size, 
+        dim_state = self.dim_state if cfg.arch_type == 'rae' else self.dim_state_acc
+        policy_accident = AccidentPolicy(dim_state, self.dim_action_acc, cfg.hidden_size, 
             dim_latent=cfg.dim_latent, arch_type=cfg.arch_type, policy_type=self.type_acc).to(self.device)
         # create fixation prediction policy
-        policy_fixation = FixationPolicy(self.dim_state_fix, self.dim_action_fix, cfg.hidden_size, policy_type=self.type_fix).to(self.device)
+        dim_state = self.dim_state if cfg.arch_type == 'rae' else self.dim_state_fix
+        policy_fixation = FixationPolicy(dim_state, self.dim_action_fix, cfg.hidden_size, 
+            dim_latent=cfg.dim_latent, arch_type=cfg.arch_type, policy_type=self.type_fix).to(self.device)
         return policy_accident, policy_fixation, critic, critic_target
 
     
@@ -106,13 +110,15 @@ class SAC(object):
         """
         state_max = state[:, :self.dim_state_acc]
         state_avg = state[:, self.dim_state_acc:]
+        acc_state = state.clone() if self.arch_type == 'rae' else state_max
+        fix_state = state.clone() if self.arch_type == 'rae' else state_avg
         # execute actions
         if evaluate is False:
-            action_acc, rnn_state, _, _ = self.policy_accident.sample(state_max, rnn_state)
-            action_fix, _, _ = self.policy_fixation.sample(state_avg)
+            action_acc, rnn_state, _, _ = self.policy_accident.sample(acc_state, rnn_state)
+            action_fix, _, _ = self.policy_fixation.sample(fix_state)
         else:
-            _, rnn_state, _, action_acc = self.policy_accident.sample(state_max, rnn_state)
-            _, _, action_fix = self.policy_fixation.sample(state_avg)
+            _, rnn_state, _, action_acc = self.policy_accident.sample(acc_state, rnn_state)
+            _, _, action_fix = self.policy_fixation.sample(fix_state)
         # get actions
         actions = torch.cat([action_acc.detach(), action_fix.detach()], dim=1)  # (B, 3)
         if rnn_state is not None:
@@ -125,9 +131,11 @@ class SAC(object):
             # split the next_states
             next_state_max = next_state_batch[:, :self.dim_state_acc]
             next_state_avg = next_state_batch[:, self.dim_state_acc:]
+            next_acc_state = next_state_batch.clone() if self.arch_type == 'rae' else next_state_max
+            next_fix_state = next_state_batch.clone() if self.arch_type == 'rae' else next_state_avg
             # inference two policies
-            next_acc_state_action, _, next_acc_state_log_pi, _ = self.policy_accident.sample(next_state_max, rnn_state_batch)
-            next_fix_state_action, next_fix_state_log_pi, _ = self.policy_fixation.sample(next_state_avg)
+            next_acc_state_action, _, next_acc_state_log_pi, _ = self.policy_accident.sample(next_acc_state, rnn_state_batch)
+            next_fix_state_action, next_fix_state_log_pi, _ = self.policy_fixation.sample(next_fix_state)
             next_state_action = torch.cat([next_acc_state_action, next_fix_state_action], dim=1)
             # interence critics
             qf1_next_target, qf2_next_target = self.critic_target(next_state_batch, next_state_action)
@@ -148,10 +156,12 @@ class SAC(object):
         # split the states
         state_max = state_batch[:, :self.dim_state_acc]
         state_avg = state_batch[:, self.dim_state_acc:]
+        acc_state = state_batch.clone() if self.arch_type == 'rae' else state_max
+        fix_state = state_batch.clone() if self.arch_type == 'rae' else state_avg
 
         # sampling
-        pi_acc, _, log_pi_acc, mean_acc = self.policy_accident.sample(state_max, rnn_state_batch, detach=True)
-        pi_fix, log_pi_fix, mean_fix = self.policy_fixation.sample(state_avg)
+        pi_acc, _, log_pi_acc, mean_acc = self.policy_accident.sample(acc_state, rnn_state_batch, detach=True)
+        pi_fix, log_pi_fix, mean_fix = self.policy_fixation.sample(fix_state, detach=True)
         pi = torch.cat([pi_acc, pi_fix], dim=1)
         log_pi = log_pi_acc + log_pi_fix
 
