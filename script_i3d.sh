@@ -25,17 +25,20 @@ case ${PHASE} in
         --input_shape 224 224 \
         --num_workers 4 \
         --epoch 50 \
+        --learning_rate 0.0005 \
         --gpus $GPU_IDS \
         --train_all \
         --output ./output/$OUTPUT
     ;;
   test)
     # run testing
-    echo "Not Implemented!"
-    ;;
-  evaluate)
-    # evaluate the results
-    echo "Not Implemented!"
+    CUDA_VISIBLE_DEVICES=$GPU_IDS python main_i3d.py \
+        --phase test \
+        --batch_size 1 \
+        --input_shape 224 224 \
+        --gpus $GPU_IDS \
+        --model_weights output/$OUTPUT/checkpoints/i3d_accident_50.pth \
+        --output ./output/$OUTPUT
     ;;
   *)
     echo "Invalid argument!"

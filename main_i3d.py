@@ -36,6 +36,7 @@ def setup_dataloader(cfg, isTraining=True):
     transform_dict = {'image': transforms.Compose([ProcessImages(cfg.input_shape, mean=[0.218, 0.220, 0.209], std=[0.277, 0.280, 0.277])]), 'focus': None, 'fixpt': None}
     # testing dataset
     if not isTraining:
+        eval_set = 'testing'  # validation
         test_data = DADA2KS(cfg.data_path, 'testing', interval=cfg.frame_interval, transforms=transform_dict, use_focus=False, use_fixation=False)
         testdata_loader = DataLoader(dataset=test_data, batch_size=cfg.batch_size, shuffle=False, drop_last=True, num_workers=0, pin_memory=True)
         print("# test set: %d"%(len(test_data)))
@@ -55,17 +56,20 @@ def setup_dataloader(cfg, isTraining=True):
 
 def setup_i3d(num_classes, weight='i3d_rgb_charades.pt', device=torch.device('cuda')):
     """Setup I3D model"""
-    i3d = InceptionI3d(157, in_channels=3)  # load the layers before Mixed_5c
+    i3d = InceptionI3d(157, in_channels=3, in_temporal=8)  # load the layers before Mixed_5c
     assert os.path.exists(weight), "I3D weight file does not exist! %s"%(weight)
     i3d.load_state_dict(torch.load(weight))
     i3d.replace_logits(num_classes) 
     i3d.to(device)
     i3d = nn.DataParallel(i3d)
+    return i3d
+
+def fix_parameters(i3d, train_all=True):
     # fix parameters before Mixed_5 block
     for p in i3d.parameters():
         p.requires_grad = False
     for p_name, p_obj in i3d.named_parameters():
-        if not args.train_all:
+        if not train_all:
             # fine tune training
             if 'Mixed_5' in p_name:
                 p_obj.requires_grad = True
@@ -74,7 +78,6 @@ def setup_i3d(num_classes, weight='i3d_rgb_charades.pt', device=torch.device('cu
         else:
             # train all layers
             p_obj.requires_grad = True
-    return i3d
 
 
 def train():
@@ -93,6 +96,7 @@ def train():
 
     # I3D model
     i3d = setup_i3d(num_classes, weight=args.pretrained_i3d, device=device)
+    fix_parameters(i3d, train_all=args.train_all)
     i3d.train()
 
     # optimizer
@@ -107,7 +111,7 @@ def train():
         i3d.train()
         for i, (video_data, _, _, data_info) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), 
                                                                                      desc='Epoch: %d / %d'%(k + 1, args.epoch)):  # (B, T, H, W, C)
-            data_input = Variable(video_data.permute(0, 2, 1, 3, 4)).to(device, non_blocking=True)  # (B, 3, T, H, W)
+            data_input = Variable(video_data[:, -8:].permute(0, 2, 1, 3, 4)).to(device, non_blocking=True)  # (B, 3, T, H, W)
             label_onehot = torch.zeros(args.batch_size, num_classes)
             label_onehot.scatter_(1, data_info[:, 4].unsqueeze(1).long(), 1)  # one-hot, (B, 2)
             label_onehot = Variable(label_onehot).to(device, non_blocking=True)
@@ -137,11 +141,11 @@ def train():
         # testing
         i3d.eval()
         val_loss = 0
-        # all_preds, all_labels = [], []
+        all_preds, all_labels = [], []
         with torch.no_grad():
             for i, (video_data, _, _, data_info) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), 
                                                                                     desc='Epoch: %d / %d'%(k + 1, args.epoch)):  # (B, T, H, W, C)
-                data_input = video_data.permute(0, 2, 1, 3, 4).to(device, non_blocking=True)  # (B, T, 3, H, W)
+                data_input = video_data[:, -8:].permute(0, 2, 1, 3, 4).to(device, non_blocking=True)  # (B, T, 3, H, W)
                 label_onehot = torch.zeros(args.batch_size, num_classes)
                 label_onehot.scatter_(1, data_info[:, 4].unsqueeze(1).long(), 1)  # one-hot
                 label_onehot = label_onehot.to(device, non_blocking=True)
@@ -151,16 +155,17 @@ def train():
                 cls_loss = F.binary_cross_entropy_with_logits(torch.max(predictions, dim=2)[0], label_onehot)
                 val_loss += cls_loss.item()
                 # # results
-                # all_preds.append(torch.max(predictions, dim=2)[0][:, 1].cpu().numpy())
-                # all_labels.append(data_info[:, 4].numpy())
+                preds = torch.softmax(torch.max(predictions, dim=2)[0], dim=1)
+                all_preds.append(preds[:, 1].cpu().numpy())
+                all_labels.append(data_info[:, 4].numpy())
         # write logging and evaluate accuracy
         val_loss /= len(evaldata_loader)
         TBlogger.add_scalar('loss/val', val_loss, (k+1) * len(traindata_loader))
-        # # accuracy
-        # all_preds = np.concatenate(all_preds)
-        # all_labels = np.concatenate(all_labels)
-        # AUC_video = roc_auc_score(all_preds, all_labels)
-        # TBlogger.add_scalar('accuracy/auc', AUC_video, (k+1) * len(traindata_loader))
+        # accuracy
+        all_preds = np.concatenate(all_preds)
+        all_labels = np.concatenate(all_labels)
+        AUC_video = roc_auc_score(all_labels, all_preds)
+        TBlogger.add_scalar('accuracy/auc', AUC_video, (k+1) * len(traindata_loader))
 
 def test():
     # prepare output directory
@@ -176,17 +181,15 @@ def test():
         # initialize dataset
         testdata_loader,num_classes = setup_dataloader(args, isTraining=False)
 
-        i3d = InceptionI3d(num_classes, in_channels=3)  # load the layers before Mixed_5c
-        assert os.path.exists(args.model_weights), "I3D weight file does not exist! %s"%(args.model_weights)
-        i3d.load_state_dict(torch.load(args.model_weights))
-        i3d.to(device)
-        i3d = nn.DataParallel(i3d)
+        i3d = setup_i3d(num_classes, weight=args.pretrained_i3d, device=device)
+        ckpt = torch.load(args.model_weights)
+        i3d.load_state_dict(ckpt['model'])
 
         i3d.eval()
         all_preds, all_labels, all_vids = [], [], []
         with torch.no_grad():
             for i, (video_data, _, _, data_info) in tqdm(enumerate(testdata_loader), total=len(testdata_loader)):  # (B, T, H, W, C)
-                data_input = video_data.permute(0, 2, 1, 3, 4).to(device, non_blocking=True)  # (B, T, 3, H, W)
+                data_input = video_data[:, -8:].permute(0, 2, 1, 3, 4).to(device, non_blocking=True)  # (B, T, 3, H, W)
                 # run forward
                 output = i3d(data_input)
                 preds = torch.softmax(torch.max(output, dim=2)[0], dim=1)
@@ -201,7 +204,7 @@ def test():
         all_vids = np.concatenate(all_vids)
         np.savez(result_file[:-4], preds=all_preds, labels=all_labels, vids=all_vids)
     # evaluation
-    AUC_video = roc_auc_score(all_preds, all_labels)
+    AUC_video = roc_auc_score(all_labels, all_preds)
     print("[Correctness] v-AUC = %.5f"%(AUC_video))
 
 
