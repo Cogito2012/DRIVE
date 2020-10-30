@@ -17,7 +17,6 @@ from src.DADA2KS import DADA2KS
 from src.data_transform import ProcessImages, ProcessFixations
 from tqdm import tqdm
 import datetime
-from torch.utils.tensorboard import SummaryWriter
 
 from src.enviroment import DashCamEnv
 from RLlib.SAC.sac import SAC

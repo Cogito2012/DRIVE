@@ -118,11 +118,21 @@ class DashCamEnv(core.Env):
             state_max = F.max_pool2d(saliency * bottom, kernel_size=bottom.size()[2:]).squeeze_(dim=-1).squeeze_(dim=-1)
             state_avg = F.avg_pool2d(saliency * bottom, kernel_size=bottom.size()[2:]).squeeze_(dim=-1).squeeze_(dim=-1)
         elif self.saliency == 'TASED-Net':
-            data_input = data_input.permute(0, 2, 1, 3, 4).contiguous()  # (B, C=3, T=8, H=480, W=640)
+            data_observe = data_input.permute(0, 2, 1, 3, 4).contiguous()  # (B, C=3, T=32, H=480, W=640)
             # compute saliency map
-            bottom = self.observe_model(data_input, return_bottom=True)
-            state_max = F.max_pool3d(bottom, kernel_size=bottom.size()[2:]).squeeze_(dim=-1).squeeze_(dim=-1).squeeze_(dim=-1)
-            state_avg = F.avg_pool3d(bottom, kernel_size=bottom.size()[2:]).squeeze_(dim=-1).squeeze_(dim=-1).squeeze_(dim=-1)
+            saliency_bu, bottom = self.observe_model(data_observe, return_bottom=True)  # (1,1,1,60,80), [1, 192, 4, 60, 80]
+            # compute top-down saliency map
+            if fixation is not None:
+                data_foveal = self.foveal_model.foveate(data_input[:, 0], fixation)
+                saliency_td = self.observe_model(data_foveal.unsqueeze(2).repeat(1, 1, T, 1, 1))  # (B, 1, 1, 60, 80)
+                # saliency fusion
+                rho = self.rho if self.fusion == 'static' else self.rho.unsqueeze(1).unsqueeze(1).unsqueeze(1).unsqueeze(1)  # (B, 1, 1, 1, 1)
+                saliency = (1 - rho) * saliency_bu + rho * saliency_td
+            else:
+                saliency = saliency_bu.clone()
+            # construct states
+            state_max = F.max_pool3d(saliency * bottom, kernel_size=bottom.size()[2:]).squeeze_(dim=-1).squeeze_(dim=-1).squeeze_(dim=-1)
+            state_avg = F.avg_pool3d(saliency * bottom, kernel_size=bottom.size()[2:]).squeeze_(dim=-1).squeeze_(dim=-1).squeeze_(dim=-1)
         else:
             raise NotImplementedError
         # normalize state representation
