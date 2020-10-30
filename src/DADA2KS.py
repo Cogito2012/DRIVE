@@ -8,13 +8,14 @@ from torchvision import transforms
 
 class DADA2KS(Dataset):
     def __init__(self, root_path, phase, interval=1, transforms={'image':None, 'focus': None, 'fixpt': None}, 
-                       use_focus=True, use_fixation=True):
+                       use_focus=True, use_fixation=True, data_aug=False):
         self.root_path = root_path
         self.phase = phase  # 'training', 'testing', 'validation'
         self.interval = interval
         self.transforms = transforms
         self.use_focus = use_focus
         self.use_fixation = use_fixation
+        self.data_aug = data_aug
         self.fps = 30
         self.num_classes = 2
         # read samples list
@@ -24,13 +25,23 @@ class DADA2KS(Dataset):
         list_file = os.path.join(self.root_path, self.phase, self.phase + '.txt')
         assert os.path.exists(list_file), "File does not exist! %s"%(list_file)
         fileIDs, labels, clips, toas = [], [], [], []
+        samples_visited, visit_rows = [], []
         with open(list_file, 'r') as f:
-            for line in f.readlines():
+            for ids, line in enumerate(f.readlines()):
                 sample = line.strip().split(' ')  # e.g.: 1/002 1 0 149 136
                 fileIDs.append(sample[0])       # 1/002
                 labels.append(int(sample[1]))   # 1: positive, 0: negative
                 clips.append([int(sample[2]), int(sample[3])])  # [start frame, end frame]
                 toas.append(int(sample[4]))     # time-of-accident (toa)
+                sample_id = sample[0] + '_' + sample[1]
+                if sample_id not in samples_visited:
+                    samples_visited.append(sample_id)
+                    visit_rows.append(ids)
+        if not self.data_aug:
+            fileIDs = [fileIDs[i] for i in visit_rows]
+            labels = [labels[i] for i in visit_rows]
+            clips = [clips[i] for i in visit_rows]
+            toas = [toas[i] for i in visit_rows]
         return fileIDs, labels, clips, toas
 
     def __len__(self):

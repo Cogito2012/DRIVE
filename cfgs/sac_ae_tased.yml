@@ -3,6 +3,7 @@ ENV:
   batch_size: 1
   image_shape: [330, 792]
   input_shape: [480, 640]
+  data_aug: false
   frame_interval: 1
   step_size: 8
   len_clip: 32
