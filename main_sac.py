@@ -31,6 +31,8 @@ def parse_configs():
                         help='Configuration file for SAC algorithm.')
     parser.add_argument('--phase', default='train', choices=['train', 'test'],
                         help='Training or testing phase.')
+    parser.add_argument('--gpu_id', type=int, default=0, metavar='N',
+                        help='The ID number of GPU. Default: 0')
     parser.add_argument('--num_workers', type=int, default=4, metavar='N',
                         help='The number of workers to load dataset. Default: 4')
     parser.add_argument('--baseline', default='none', choices=['random', 'all_pos', 'all_neg', 'none'],
@@ -50,7 +52,7 @@ def parse_configs():
     with open(args.config, 'r') as f:
         cfg = EasyDict(yaml.safe_load(f))
     cfg.update(vars(args))
-    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
+    device = torch.device('cuda:' + cfg.gpu_id) if torch.cuda.is_available() else torch.device('cpu')
     cfg.update(device=device)
 
     cfg.SAC.image_shape = cfg.ENV.image_shape
