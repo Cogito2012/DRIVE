@@ -226,11 +226,13 @@ def evaluation_fixation(pred_fixations, gt_fixations, metric='mse'):
     mse_final = np.mean(mse_result)
     return mse_final
 
-def evaluation_auc_scores(all_pred_scores, all_gt_labels, all_toas, FPS, video_len=5, pos_only=False):
+def evaluation_auc_scores(all_pred_scores, all_gt_labels, all_toas, FPS, video_len=5, pos_only=False, random=False):
     if pos_only:
         all_vid_scores = [max(pred[int(toa * FPS):]) for toa, pred in zip(all_toas, all_pred_scores)]
     else:
         all_vid_scores = [max(pred[:int(toa * FPS)]) for toa, pred in zip(all_toas, all_pred_scores)]
+    if random:
+        all_vid_scores = list(np.random.random(len(all_gt_labels)))
     # compute video-level AUC
     AUC_video = roc_auc_score(all_gt_labels, all_vid_scores)
     # compute frame-level AUC
