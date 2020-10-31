@@ -52,7 +52,7 @@ def parse_configs():
     with open(args.config, 'r') as f:
         cfg = EasyDict(yaml.safe_load(f))
     cfg.update(vars(args))
-    device = torch.device('cuda:' + cfg.gpu_id) if torch.cuda.is_available() else torch.device('cpu')
+    device = torch.device('cuda:' + str(cfg.gpu_id)) if torch.cuda.is_available() else torch.device('cpu')
     cfg.update(device=device)
 
     cfg.SAC.image_shape = cfg.ENV.image_shape
