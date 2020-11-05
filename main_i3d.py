@@ -33,21 +33,21 @@ def set_deterministic(seed):
 
 
 def setup_dataloader(cfg, isTraining=True):
-    transform_dict = {'image': transforms.Compose([ProcessImages(cfg.input_shape, mean=[0.218, 0.220, 0.209], std=[0.277, 0.280, 0.277])]), 'focus': None, 'fixpt': None}
+    transform_dict = {'image': transforms.Compose([ProcessImages(cfg.input_shape, mean=[0.218, 0.220, 0.209], std=[0.277, 0.280, 0.277])]), 'salmap': None, 'fixpt': None}
     # testing dataset
     if not isTraining:
         eval_set = 'testing'  # validation
-        test_data = DADA2KS(cfg.data_path, 'testing', interval=cfg.frame_interval, transforms=transform_dict, use_focus=False, use_fixation=False)
+        test_data = DADA2KS(cfg.data_path, 'testing', interval=cfg.frame_interval, transforms=transform_dict, use_salmap=False, use_fixation=False)
         testdata_loader = DataLoader(dataset=test_data, batch_size=cfg.batch_size, shuffle=False, drop_last=True, num_workers=0, pin_memory=True)
         print("# test set: %d"%(len(test_data)))
         return testdata_loader, test_data.num_classes
 
     # training dataset
-    train_data = DADA2KS(cfg.data_path, 'training', interval=cfg.frame_interval, transforms=transform_dict, use_focus=False, use_fixation=False)
+    train_data = DADA2KS(cfg.data_path, 'training', interval=cfg.frame_interval, transforms=transform_dict, use_salmap=False, use_fixation=False)
     traindata_loader = DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, drop_last=True, num_workers=cfg.num_workers, pin_memory=True)
 
     # validataion dataset
-    eval_data = DADA2KS(cfg.data_path, 'validation', interval=cfg.frame_interval, transforms=transform_dict, use_focus=False, use_fixation=False)
+    eval_data = DADA2KS(cfg.data_path, 'validation', interval=cfg.frame_interval, transforms=transform_dict, use_salmap=False, use_fixation=False)
     evaldata_loader = DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, drop_last=True, num_workers=cfg.num_workers, pin_memory=True)
     print("# train set: %d, eval set: %d"%(len(train_data), len(eval_data)))
 

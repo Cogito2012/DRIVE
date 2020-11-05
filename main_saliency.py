@@ -41,14 +41,14 @@ def train():
 
     # dataset loader
     transform_image = transforms.Compose([ProcessImages(args.input_shape)])
-    transform_focus = transforms.Compose([ProcessImages(model.output_shape)])
+    transform_salmap = transforms.Compose([ProcessImages(model.output_shape)])
     params_norm = {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}
 
     train_data = DADALoader(args.data_path, 'training', interval=args.frame_interval, max_frames=args.max_frames, 
-                            transforms={'image':transform_image, 'focus':transform_focus}, params_norm=params_norm)
+                            transforms={'image':transform_image, 'salmap':transform_salmap}, params_norm=params_norm)
     traindata_loader = DataLoader(dataset=train_data, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
     eval_data = DADALoader(args.data_path, 'validation', interval=args.frame_interval, max_frames=args.max_frames, 
-                            transforms={'image':transform_image, 'focus':transform_focus}, params_norm=params_norm)
+                            transforms={'image':transform_image, 'salmap':transform_salmap}, params_norm=params_norm)
     evaldata_loader = DataLoader(dataset=eval_data, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
     print("# train set: %d, eval set: %d"%(len(train_data), len(eval_data)))
 
@@ -61,17 +61,17 @@ def train():
     for k in range(args.epoch):
         # train the model 
         model.train()
-        for i, (video_data, focus_data, _, _) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), desc="Epoch %d [train]"%(k)):
+        for i, (video_data, salmap_data, _, _) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), desc="Epoch %d [train]"%(k)):
             optimizer.zero_grad()
             # move data to device (gpu)
             video_data = video_data.view(-1, video_data.size(2), video_data.size(3), video_data.size(4)) \
                         .contiguous().to(device, dtype=torch.float)  # ~30 MiB
-            focus_data = focus_data.view(-1, 1, focus_data.size(3), focus_data.size(4)) \
+            salmap_data = salmap_data.view(-1, 1, salmap_data.size(3), salmap_data.size(4)) \
                         .contiguous().to(device, dtype=torch.float)
             # forward
             out = model.forward(video_data)
             # loss
-            loss = criterion(out, focus_data, model.prior.clone())
+            loss = criterion(out, salmap_data, model.prior.clone())
             loss.backward()
             optimizer.step()
             # print
@@ -81,16 +81,16 @@ def train():
         # eval the model
         model.eval()
         loss_val = 0
-        for i, (video_data, focus_data, _, _) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), desc="Epoch %d [eval]"%(k)):
+        for i, (video_data, salmap_data, _, _) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), desc="Epoch %d [eval]"%(k)):
             # move data to device (gpu)
             video_data = video_data.view(-1, video_data.size(2), video_data.size(3), video_data.size(4)) \
                         .contiguous().to(device, dtype=torch.float)  # ~30 MiB
-            focus_data = focus_data.view(-1, 1, focus_data.size(3), focus_data.size(4)) \
+            salmap_data = salmap_data.view(-1, 1, salmap_data.size(3), salmap_data.size(4)) \
                         .contiguous().to(device, dtype=torch.float)
             with torch.no_grad():
                 # forward
                 out = model.forward(video_data)
-                loss = criterion(out, focus_data, model.prior.clone())
+                loss = criterion(out, salmap_data, model.prior.clone())
                 loss_val += loss.item()
         loss_val /= i
         # write tensorboard logging
@@ -113,7 +113,7 @@ def test():
     # testing dataset
     transform_image = transforms.Compose([ProcessImages(args.input_shape)])
     params_norm = {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}
-    test_data = DADALoader(args.data_path, 'testing', transforms={'image':transform_image, 'focus':None}, params_norm=params_norm)
+    test_data = DADALoader(args.data_path, 'testing', transforms={'image':transform_image, 'salmap':None}, params_norm=params_norm)
     testdata_loader = DataLoader(dataset=test_data, batch_size=1, shuffle=False)
 
     # model
@@ -135,7 +135,7 @@ def test():
 
     # run inference
     with torch.no_grad():
-        for i, (video_data, focus_data, coord_data, data_info) in enumerate(testdata_loader):
+        for i, (video_data, salmap_data, coord_data, data_info) in enumerate(testdata_loader):
             # parse data info
             data_info = data_info.cpu().numpy() if data_info.is_cuda else data_info.detach().numpy()
             filename = str(int(data_info[0, 0])) + '_%03d'%(int(data_info[0, 1])) + '.avi'
@@ -175,7 +175,7 @@ def eval(pred_dir):
         # read predicted saliency video
         salmaps_pred = read_saliency_videos(os.path.join(pred_dir, filename))
         # read ground truth video
-        salmaps_gt = read_saliency_videos(os.path.join(args.data_path, 'testing', 'focus_videos', filename.split('_')[0], filename.split('_')[1]))
+        salmaps_gt = read_saliency_videos(os.path.join(args.data_path, 'testing', 'salmap_videos', filename.split('_')[0], filename.split('_')[1]))
         assert salmaps_pred.shape[0] == salmaps_gt.shape[0], "Predictions and GT are not aligned! %s"%(filename)
         # compute metrics for each frame
         num_frames = salmaps_pred.shape[0]

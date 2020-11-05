@@ -33,6 +33,7 @@ class DashCamEnv(core.Env):
         self.fusion = cfg.fusion
         self.fusion_margin = cfg.fusion_margin
         self.rho = cfg.rho
+        self.get_salmap = cfg.get_salmap if hasattr(cfg, 'get_salmap') else False
 
 
     def set_model(self, pretrained=False, weight_file=None):
@@ -86,6 +87,8 @@ class DashCamEnv(core.Env):
     def reset(self):
         self.cur_step = 0  # step id of the environment
         self.next_fixation = None
+        if self.get_salmap:
+            self.cur_saliency = None
         # fetch video clip
         frame_data = self.video_data[:, self.cur_step*self.step_size: self.cur_step*self.step_size+self.len_clip]  # (B, T, C, H, W)
         # observation by computing saliency
@@ -140,6 +143,8 @@ class DashCamEnv(core.Env):
             state_max = F.normalize(state_max, p=2, dim=1)
             state_avg = F.normalize(state_avg, p=2, dim=1)
         state = torch.cat([state_max, state_avg], dim=1)  # (B, 128)
+        if self.get_salmap:
+            self.cur_saliency = saliency.clone()
         return state
 
 

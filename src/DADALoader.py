@@ -7,8 +7,8 @@ from torchvision import transforms
 
 class DADALoader(Dataset):
     def __init__(self, root_path, phase, interval=1, max_frames=-1, 
-                       transforms={'image':None, 'focus': None, 'fixpt': None}, 
-                       params_norm=None, binary_cls=False, use_focus=True, use_fixation=True, cls_task=False):
+                       transforms={'image':None, 'salmap': None, 'fixpt': None}, 
+                       params_norm=None, binary_cls=False, use_salmap=True, use_fixation=True, cls_task=False):
         self.root_path = root_path
         self.phase = phase  # 'training', 'testing', 'validation'
         self.interval = interval
@@ -16,7 +16,7 @@ class DADALoader(Dataset):
         self.transforms = transforms
         self.params_norm = params_norm
         self.binary_cls = binary_cls
-        self.use_focus = use_focus
+        self.use_salmap = use_salmap
         self.use_fixation = use_fixation
         self.cls_task = cls_task
         self.fps = 30
@@ -252,12 +252,12 @@ class DADALoader(Dataset):
                 for i in range(video_data.shape[1]):
                     video_data[:, i] = (video_data[:, i] - self.params_norm['mean'][i]) / self.params_norm['std'][i]
 
-        if self.use_focus:
+        if self.use_salmap:
             # read focus data, (T, H, W, C)
             # focus_data = self.read_focus_from_images(frame_ids, index)
             focus_data = self.read_focus_from_videos(frame_ids, index)
             if self.transforms['focus'] is not None:
-                focus_data = self.transforms['focus'](focus_data)  # (T, 1, H, W)
+                focus_data = self.transforms['salmap'](focus_data)  # (T, 1, H, W)
         else:
             focus_data = torch.empty(0)
         
@@ -309,11 +309,11 @@ def setup_dataloader(cfg):
     params_norm = {'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}
     # training dataset
     train_data = DADALoader(cfg.data_path, 'training', interval=cfg.frame_interval, max_frames=cfg.max_frames, 
-                            transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_focus=cfg.use_salmap)
+                            transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_salmap=cfg.use_salmap)
     traindata_loader = DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers)
     # validataion dataset
     eval_data = DADALoader(cfg.data_path, 'validation', interval=cfg.frame_interval, max_frames=cfg.max_frames, 
-                            transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_focus=cfg.use_salmap)
+                            transforms=transform_dict, params_norm=params_norm, binary_cls=cfg.binary_cls, use_salmap=cfg.use_salmap)
     evaldata_loader = DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers)
     print("# train set: %d, eval set: %d"%(len(train_data), len(eval_data)))
     return traindata_loader, evaldata_loader

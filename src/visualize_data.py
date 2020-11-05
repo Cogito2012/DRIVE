@@ -51,13 +51,13 @@ if __name__ == "__main__":
     vis_video_file = './vis_data/vis_' + atype + '_' + sequence + '.avi'
 
     video_file = os.path.join(root_path, phase, 'rgb_videos', atype, sequence + '.avi')
-    focus_file = os.path.join(root_path, phase, 'focus_videos', atype, sequence + '.avi')
+    salmap_file = os.path.join(root_path, phase, 'salmap_videos', atype, sequence + '.avi')
     coord_file = os.path.join(root_path, phase, 'coordinate', atype, sequence + '_coordinate.txt')
     mapping_file = os.path.join(root_path, 'mapping.txt')
     
     video_data = get_video_frames(video_file)
-    focus_data = get_video_frames(focus_file)
-    assert len(video_data) == len(focus_data)
+    salmap_data = get_video_frames(salmap_file)
+    assert len(video_data) == len(salmap_data)
 
     coord_data = read_coord_arrays(coord_file)
     assert len(video_data) == coord_data.shape[0]
@@ -68,7 +68,7 @@ if __name__ == "__main__":
     heatmap = np.zeros_like(video_data[0])
     h, w, c = heatmap.shape
     progress_bar = np.full((barWidth, w, c), (255, 255, 0), np.uint8)  # cyan color
-    for t, (frame, salmap, fixation) in enumerate(zip(video_data, focus_data, coord_data)):
+    for t, (frame, salmap, fixation) in enumerate(zip(video_data, salmap_data, coord_data)):
         # add saliency heatmap as overlap
         heatmap = cv2.applyColorMap(salmap, cv2.COLORMAP_JET)
         visframe = cv2.addWeighted(frame, 0.7, heatmap, 0.3, 0)

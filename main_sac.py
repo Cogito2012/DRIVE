@@ -74,21 +74,21 @@ def set_deterministic(seed):
 
 def setup_dataloader(cfg, num_workers=0, isTraining=True):
     transform_dict = {'image': transforms.Compose([ProcessImages(cfg.input_shape, mean=[0.218, 0.220, 0.209], std=[0.277, 0.280, 0.277])]),
-                      'focus': transforms.Compose([ProcessImages(cfg.output_shape)]), 
+                      'salmap': transforms.Compose([ProcessImages(cfg.output_shape)]), 
                       'fixpt': transforms.Compose([ProcessFixations(cfg.input_shape, cfg.image_shape)])}
     # testing dataset
     if not isTraining:
-        test_data = DADA2KS(cfg.data_path, 'testing', interval=cfg.frame_interval, transforms=transform_dict, use_focus=cfg.use_salmap)
+        test_data = DADA2KS(cfg.data_path, 'testing', interval=cfg.frame_interval, transforms=transform_dict, use_salmap=cfg.use_salmap)
         testdata_loader = DataLoader(dataset=test_data, batch_size=cfg.batch_size, shuffle=False, drop_last=True, num_workers=num_workers, pin_memory=True)
         print("# test set: %d"%(len(test_data)))
         return testdata_loader
 
     # training dataset
-    train_data = DADA2KS(cfg.data_path, 'training', interval=cfg.frame_interval, transforms=transform_dict, use_focus=cfg.use_salmap, data_aug=cfg.data_aug)
+    train_data = DADA2KS(cfg.data_path, 'training', interval=cfg.frame_interval, transforms=transform_dict, use_salmap=cfg.use_salmap, data_aug=cfg.data_aug)
     traindata_loader = DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, drop_last=True, num_workers=num_workers, pin_memory=True)
 
     # validataion dataset
-    eval_data = DADA2KS(cfg.data_path, 'validation', interval=cfg.frame_interval, transforms=transform_dict, use_focus=cfg.use_salmap, data_aug=cfg.data_aug)
+    eval_data = DADA2KS(cfg.data_path, 'validation', interval=cfg.frame_interval, transforms=transform_dict, use_salmap=cfg.use_salmap, data_aug=cfg.data_aug)
     evaldata_loader = DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, drop_last=True, num_workers=num_workers, pin_memory=True)
     print("# train set: %d, eval set: %d"%(len(train_data), len(eval_data)))
 

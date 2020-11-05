@@ -7,13 +7,13 @@ from torchvision import transforms
 
 
 class DADA2KS(Dataset):
-    def __init__(self, root_path, phase, interval=1, transforms={'image':None, 'focus': None, 'fixpt': None}, 
-                       use_focus=True, use_fixation=True, data_aug=False):
+    def __init__(self, root_path, phase, interval=1, transforms={'image':None, 'salmap': None, 'fixpt': None}, 
+                       use_salmap=True, use_fixation=True, data_aug=False):
         self.root_path = root_path
         self.phase = phase  # 'training', 'testing', 'validation'
         self.interval = interval
         self.transforms = transforms
-        self.use_focus = use_focus
+        self.use_salmap = use_salmap
         self.use_fixation = use_fixation
         self.data_aug = data_aug
         self.fps = 30
@@ -111,13 +111,13 @@ class DADA2KS(Dataset):
         if self.transforms['image'] is not None:
             video_data = self.transforms['image'](video_data)  # (T, C, H, W)
         
-        # read focus video (trimmed)
-        focus_data = torch.empty(0)
-        if self.use_focus:
-            focus_path = os.path.join(self.root_path, self.phase, 'focus_videos', self.data_list[index] + '.avi')
-            focus_data = self.read_video(focus_path, start, end, toGray=True)
-            if self.transforms['focus'] is not None:
-                focus_data = self.transforms['focus'](focus_data)  # (T, 1, H, W)
+        # read salmap video (trimmed)
+        salmap_data = torch.empty(0)
+        if self.use_salmap:
+            salmap_path = os.path.join(self.root_path, self.phase, 'salmap_videos', self.data_list[index] + '.avi')
+            salmap_data = self.read_video(salmap_path, start, end, toGray=True)
+            if self.transforms['salmap'] is not None:
+                salmap_data = self.transforms['salmap'](salmap_data)  # (T, 1, H, W)
         
         # read fixation coordinates
         coord_data = torch.empty(0)
@@ -127,21 +127,21 @@ class DADA2KS(Dataset):
             if self.transforms['fixpt'] is not None:
                 coord_data = self.transforms['fixpt'](coord_data)
         
-        return video_data, focus_data, coord_data, data_info
+        return video_data, salmap_data, coord_data, data_info
 
 
 
 def setup_dataloader(cfg):
     transform_dict = {'image': transforms.Compose([ProcessImages(cfg.input_shape)]),
-                      'focus': transforms.Compose([ProcessImages(cfg.output_shape)]), 
+                      'salmap': transforms.Compose([ProcessImages(cfg.output_shape)]), 
                       'fixpt': transforms.Compose([ProcessFixations(cfg.input_shape, cfg.image_shape)])}
     # training dataset
     train_data = DADA2KS(cfg.data_path, 'training', interval=cfg.frame_interval, 
-                            transforms=transform_dict, use_focus=cfg.use_salmap)
+                            transforms=transform_dict, use_salmap=cfg.use_salmap)
     traindata_loader = DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, pin_memory=True)
     # validataion dataset
     eval_data = DADA2KS(cfg.data_path, 'validation', interval=cfg.frame_interval, 
-                            transforms=transform_dict, use_focus=cfg.use_salmap)
+                            transforms=transform_dict, use_salmap=cfg.use_salmap)
     evaldata_loader = DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers, pin_memory=True)
     print("# train set: %d, eval set: %d"%(len(train_data), len(eval_data)))
     return traindata_loader, evaldata_loader

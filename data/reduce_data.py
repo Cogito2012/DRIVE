@@ -53,10 +53,12 @@ def reduce_data(data_path, ratio, max_frames, subset, result_path):
     # the input path
     coord_path_src = os.path.join(data_path, subset, 'coordinate')
     focus_path_src = os.path.join(data_path, subset, 'focus_videos')
+    salmap_path_src = os.path.join(data_path, subset, 'salmap_videos')
     video_path_src = os.path.join(data_path, subset, 'rgb_videos')
     # the input path
     coord_path_dst = os.path.join(result_path, subset, 'coordinate')
     focus_path_dst = os.path.join(result_path, subset, 'focus_videos')
+    salmap_path_dst = os.path.join(result_path, subset, 'salmap_videos')
     video_path_dst = os.path.join(result_path, subset, 'rgb_videos')
     
     for accID in sorted(os.listdir(coord_path_src)):
@@ -82,6 +84,12 @@ def reduce_data(data_path, ratio, max_frames, subset, result_path):
             focus_video_src = os.path.join(focus_path_src, accID, vid + '.avi')
             focus_video_dst = os.path.join(focus_path_dst, accID, vid + '.avi')
             reduce_video(focus_video_src, focus_video_dst, ratio, frame_ids)
+
+            # read salmap videos
+            salmap_video_src = os.path.join(salmap_path_src, accID, vid + '.avi')
+            salmap_video_dst = os.path.join(salmap_path_dst, accID, vid + '.avi')
+            reduce_video(salmap_video_src, salmap_video_dst, ratio, frame_ids)
+
             # read rgb videos
             rgb_video_src = os.path.join(video_path_src, accID, vid + '.avi')
             rgb_video_dst = os.path.join(video_path_dst, accID, vid + '.avi')
