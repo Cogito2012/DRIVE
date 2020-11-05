@@ -321,7 +321,7 @@ def setup_dataloader(cfg):
      
 if __name__ == '__main__':
     from torch.utils.data import DataLoader
-    from data_transform import ProcessImages, ProcessFixations
+    from .data_transform import ProcessImages, ProcessFixations
     import argparse, time
     from tqdm import tqdm
     import matplotlib.pyplot as plt
