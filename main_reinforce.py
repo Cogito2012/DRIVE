@@ -274,8 +274,7 @@ def test():
     AP, p05, r05 = evaluation_accident_new(all_pred_scores, all_gt_labels, all_toas, fps=FPS)
     print("[Correctness] AP = %.4f, precision@0.5 = %.4f, recall@0.5 = %.4f"%(AP, p05, r05))
 
-    isRandom = True if cfg.baseline == 'random' else False
-    AUC_video, AUC_frame = evaluation_auc_scores(all_pred_scores, all_gt_labels, all_toas, FPS, video_len=5, pos_only=True, random=isRandom)
+    AUC_video, AUC_frame = evaluation_auc_scores(all_pred_scores, all_gt_labels, all_toas, FPS, video_len=5, pos_only=True, random=False)
     print("[Correctness] v-AUC = %.5f, f-AUC = %.5f"%(AUC_video, AUC_frame))
 
     mse_fix = evaluation_fixation(all_pred_fixations, all_gt_fixations)
