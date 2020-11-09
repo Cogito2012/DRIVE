@@ -97,6 +97,20 @@ class DashCamEnv(core.Env):
         return self.cur_state.detach()
 
 
+    def minmax_norm(self, salmap):
+        """Normalize the saliency map with min-max
+        salmap: (B, 1, H, W)
+        """
+        batch_size, height, width = salmap.size(0), salmap.size(2), salmap.size(3)
+        salmap_data = salmap.view(batch_size, -1)  # (B, H*W)
+        min_vals = salmap_data.min(1, keepdim=True)[0]  # (B, 1)
+        max_vals = salmap_data.max(1, keepdim=True)[0]  # (B, 1)
+        salmap_norm = (salmap_data - min_vals) / (max_vals - min_vals)
+        salmap_norm = salmap_norm.view(batch_size, 1, height, width)
+        return salmap_norm
+
+
+
     def observe(self, data_input, fixation=None):
         """ 
         data_input: GPU tensor, (B, T, C, H, W)
@@ -107,11 +121,13 @@ class DashCamEnv(core.Env):
             data_input = data_input.view(B*T, C, H, W)
             # compute bottom-up saliency map
             saliency_bu, bottom = self.observe_model(data_input, return_bottom=True)  # (B, 1, H, W)
+            saliency_bu = self.minmax_norm(saliency_bu)
             assert saliency_bu.size(1) == 1, "invalid saliency!"
             # compute top-down saliency map
             if fixation is not None:
                 data_foveal = self.foveal_model.foveate(data_input, fixation)
                 saliency_td = self.observe_model(data_foveal)  # (B, 1, H, W)
+                saliency_td = self.minmax_norm(saliency_td)
                 # saliency fusion
                 rho = self.rho if self.fusion == 'static' else self.rho.unsqueeze(1).unsqueeze(1).unsqueeze(1)  # (B, 1, 1, 1)
                 saliency = (1 - rho) * saliency_bu + rho * saliency_td
@@ -124,10 +140,12 @@ class DashCamEnv(core.Env):
             data_observe = data_input.permute(0, 2, 1, 3, 4).contiguous()  # (B, C=3, T=32, H=480, W=640)
             # compute saliency map
             saliency_bu, bottom = self.observe_model(data_observe, return_bottom=True)  # (1,1,1,60,80), [1, 192, 4, 60, 80]
+            saliency_bu = self.minmax_norm(saliency_bu.squeeze(2)).unsqueeze(2)
             # compute top-down saliency map
             if fixation is not None:
                 data_foveal = self.foveal_model.foveate(data_input[:, 0], fixation)
                 saliency_td = self.observe_model(data_foveal.unsqueeze(2).repeat(1, 1, T, 1, 1))  # (B, 1, 1, 60, 80)
+                saliency_td = self.minmax_norm(saliency_td.squeeze(2)).unsqueeze(2)
                 # saliency fusion
                 rho = self.rho if self.fusion == 'static' else self.rho.unsqueeze(1).unsqueeze(1).unsqueeze(1).unsqueeze(1)  # (B, 1, 1, 1, 1)
                 saliency = (1 - rho) * saliency_bu + rho * saliency_td

@@ -149,7 +149,8 @@ class MLNet(nn.Module):
 
         # dot product with prior
         x = x * upscaled_prior
-        x = torch.sigmoid(x)
+        # x = torch.sigmoid(x)
+        x = torch.nn.functional.relu(x,inplace=True)
 
         if return_bottom:
             return x, bottom
