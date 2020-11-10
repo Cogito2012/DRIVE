@@ -9,7 +9,7 @@ ENV:
   len_clip: 1
   rho: 0.5
   fusion: "dynamic"  # static or dynamic
-  fusion_margin: 0.8
+  fusion_margin: 0.5
   score_thresh: 0.5
   use_salmap: false  # set to False to speedup data loading
   state_norm: true
