@@ -9,10 +9,10 @@ from src.data_transform import ProcessImages, ProcessFixations
 from src.TorchFovea import TorchFovea
 
 
-def read_frames_from_videos(root_path, vid_name, start, end, phase='testing', interval=1):
+def read_frames_from_videos(root_path, vid_name, start, end, folder, phase='testing', interval=1):
     """Read video frames
     """
-    video_path = os.path.join(root_path, phase, 'rgb_videos', vid_name + '.avi')
+    video_path = os.path.join(root_path, phase, folder, vid_name + '.avi')
     assert os.path.exists(video_path), "Path does not exist: %s"%(video_path)
     # get the video data
     cap = cv2.VideoCapture(video_path)
@@ -24,6 +24,7 @@ def read_frames_from_videos(root_path, vid_name, start, end, phase='testing', in
         video_data.append(frame)
     video_data = np.array(video_data)
     return video_data
+
 
 def create_curve_video(pred_scores, toa, n_frames, frame_interval):
     # background
@@ -173,6 +174,9 @@ if __name__ == "__main__":
     output_dir = os.path.join(args.output, output_folder)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
+    output_gt_dir = os.path.join(args.output, 'ground_truth')
+    if not os.path.exists(output_gt_dir):
+        os.makedirs(output_gt_dir)
     
     visits = []
     for i, vids in enumerate(all_vids):
@@ -194,7 +198,7 @@ if __name__ == "__main__":
         print("accident ID=%d, video ID=%d"%(accid, vid))
         
         # read frames
-        frames = read_frames_from_videos(args.data_path, vidname, start, end, phase='testing', interval=5)
+        frames = read_frames_from_videos(args.data_path, vidname, start, end, 'rgb_videos', phase='testing', interval=5)
         # create curves
         curve_frames = create_curve_video(pred_scores, toa, len(frames), frame_interval)
         # get saliency maps
@@ -204,22 +208,28 @@ if __name__ == "__main__":
             rho = [args.rho] * len(pred_scores)
         attention_maps = generate_attention(frames, data_trans, observe_model, fovealmodel, pred_fixations, image_size, rho_list=rho, device=device)
 
+        gt_salmaps = read_frames_from_videos(args.data_path, vidname, start, end, 'salmap_videos', phase='testing', interval=5)
+
         vis_file = os.path.join(output_dir, 'vis_%d_%03d.avi'%(accid, vid))
         video_writer = cv2.VideoWriter(vis_file, cv2.VideoWriter_fourcc(*'DIVX'), 2.0, (image_size[1], image_size[0]))
-
         for t, frame in enumerate(frames):
             # add pred_mask as heatmap
             heatmap = cv2.applyColorMap((attention_maps[t] * 255).astype(np.uint8), cv2.COLORMAP_JET)
-            frame = cv2.addWeighted(frame, 0.5, heatmap, 0.5, 0)
-            if gt_fixations[t, 0] > 0 and gt_fixations[t, 1] > 0:
-                # ground truth
-                # fix_gt = fixation_padding(gt_fixations[t, 1], height, width, image_size)
-                pass
+            frame_vis = cv2.addWeighted(frame, 0.5, heatmap, 0.5, 0)
 
             # add curve
             curve_img = curve_frames[t]
             curve_height = int(curve_img.shape[0] * (image_size[1] / curve_img.shape[1]))
             curve_img = cv2.resize(curve_img, (image_size[1], curve_height), interpolation = cv2.INTER_AREA)
-            frame[image_size[0]-curve_height:image_size[0]] = cv2.addWeighted(frame[image_size[0]-curve_height:image_size[0]], 0.3, curve_img, 0.7, 0)
-            video_writer.write(frame)
+            frame_vis[image_size[0]-curve_height:image_size[0]] = cv2.addWeighted(frame_vis[image_size[0]-curve_height:image_size[0]], 0.3, curve_img, 0.7, 0)
+            video_writer.write(frame_vis)
+
+        # generate GT saliency video
+        vis_file = os.path.join(output_gt_dir, 'vis_%d_%03d.avi'%(accid, vid))
+        video_writer = cv2.VideoWriter(vis_file, cv2.VideoWriter_fourcc(*'DIVX'), 2.0, (image_size[1], image_size[0]))
+        for t, frame in enumerate(frames):
+            # add gt_mask as heatmap
+            heatmap = cv2.applyColorMap((gt_salmaps[t]), cv2.COLORMAP_JET)
+            frame_vis = cv2.addWeighted(frame, 0.5, heatmap, 0.5, 0)
+            video_writer.write(frame_vis)
         
