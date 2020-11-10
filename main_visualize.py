@@ -63,36 +63,32 @@ def create_curve_video(pred_scores, toa, n_frames, frame_interval):
     return curve_frames
 
 
-def create_heatmap(frame, fixation, color):
-    # get bottom-up attention
-    input_data = data_trans(np.expand_dims(frame, axis=0))
-    with torch.no_grad():
-        saliency_bu = salmodel(torch.FloatTensor(input_data).to(device))  # (B, 1, H, W)
-        saliency_bu = saliency_bu.squeeze(0).squeeze(0).cpu().numpy()
-    saliency_bu = up_padding(saliency_bu)
+def minmax_norm(salmap):
+    """Normalize the saliency map with min-max
+    salmap: (B, 1, H, W)
+    """
+    batch_size, height, width = salmap.size(0), salmap.size(2), salmap.size(3)
+    salmap_data = salmap.view(batch_size, -1)  # (B, H*W)
+    min_vals = salmap_data.min(1, keepdim=True)[0]  # (B, 1)
+    max_vals = salmap_data.max(1, keepdim=True)[0]  # (B, 1)
+    salmap_norm = (salmap_data - min_vals) / (max_vals - min_vals + 1e-6)
+    salmap_norm = salmap_norm.view(batch_size, 1, height, width)
+    return salmap_norm
+    
 
-    # calculate grid
-    step_r = int(image_size[0] / mask_size[0])
-    start_r, end_r = int(step_r * fixation[0]), int(step_r * (fixation[0]+1))
-    step_c = int(image_size[1] / mask_size[1])
-    start_c, end_c = int(step_c * fixation[1]), int(step_c * (fixation[1]+1))
-    # add heat map
-    heatmap = np.zeros((step_r, step_c), dtype=np.uint8) + 255
-    heatmap = cv2.applyColorMap(heatmap, color)
-    frame[start_r: end_r, start_c: end_c] = cv2.addWeighted(frame[start_r: end_r, start_c: end_c], 0.5, heatmap, 0.5, 0)
-    return frame
-
-
-def generate_attention(frame_data, data_trans, salmodel, fovealmodel, fixations, image_size, rho=0.5, device=None):
+def generate_attention(frame_data, data_trans, salmodel, fovealmodel, fixations, image_size, rho_list=None, device=None):
     # get bottom-up attention
     input_data = torch.FloatTensor(data_trans(frame_data)).to(device)
     fixation_data = torch.from_numpy(fixations).to(device)
     foveal_data = fovealmodel.foveate(input_data, fixation_data)
     with torch.no_grad():
         saliency_bu = salmodel(input_data)
+        saliency_bu = minmax_norm(saliency_bu)
         saliency_td = salmodel(foveal_data)
+        saliency_td = minmax_norm(saliency_td)
     saliency_bu = saliency_bu.squeeze(1).cpu().numpy()
     saliency_td = saliency_td.squeeze(1).cpu().numpy()
+    rho = np.expand_dims(np.expand_dims(np.array(rho_list), axis=1), axis=2)
     saliency = (1 - rho) * saliency_bu + rho * saliency_td
     # padd the saliency maps to image size
     attention_maps = saliency_padding(saliency, image_size)
@@ -129,7 +125,7 @@ def fixation_padding(fixation, height, width, image_size):
         pass
     else:
         new_rows = (image_size[0] * width) // image_size[1]
-        fixation_shifted[1] = fixation[1] - (self.height - new_rows) // 2
+        fixation_shifted[1] = fixation[1] - (height - new_rows) // 2
 
 
 if __name__ == "__main__":
@@ -139,17 +135,22 @@ if __name__ == "__main__":
                         help='Configuration file for SAC algorithm.')
     parser.add_argument('--sal_ckpt', default='models/saliency/mlnet_25.pth',
                         help='Pretrained model for bottom-up saliency prediciton.')
-    parser.add_argument('--test_results', default='output/SAC_GG_v4/eval/results.npz',
+    parser.add_argument('--test_results', default='output/SAC_AE_GG_v5/eval/results.npz',
                         help='Result file of testing data.')
-    parser.add_argument('--output', default='./output/SAC_GG_v4',
+    parser.add_argument('--rho', type=float, default=0.5,
+                        help='The rho value')
+    parser.add_argument('--static', action='store_true',
+                        help='whether to use static fusion test')
+    parser.add_argument('--output', default='./output/SAC_AE_GG_v5/vis_results',
                         help='Directory of the output. ')
     args = parser.parse_args()
     frame_interval = 5
     image_size = [330, 792]
     height, width = 480, 640
+    margin = 0.5
 
     # environmental model
-    device = torch.device("cuda:0")
+    device = torch.device("cuda")
     observe_model = MLNet((height, width))
     assert os.path.exists(args.sal_ckpt), "Checkpoint directory does not exist! %s"%(args.sal_ckpt)
     ckpt = torch.load(args.sal_ckpt)
@@ -168,7 +169,8 @@ if __name__ == "__main__":
             save_dict['pred_scores'], save_dict['gt_labels'], save_dict['pred_fixations'], save_dict['gt_fixations'], save_dict['toas'], save_dict['vids']
 
     # prepare output directory
-    output_dir = os.path.join(args.output, 'vis-bu')
+    output_folder = str(int(args.rho * 100)) if args.static else 'dynamic'
+    output_dir = os.path.join(args.output, output_folder)
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
     
@@ -178,7 +180,7 @@ if __name__ == "__main__":
         vidname = '%d/%03d'%(accid, vid)
         if vidname in visits:
             continue    
-        if len(visits) > 19:
+        if len(visits) > 1:
             break
         pred_scores = all_pred_scores[i]
         gt_labels = all_gt_labels[i]
@@ -196,7 +198,11 @@ if __name__ == "__main__":
         # create curves
         curve_frames = create_curve_video(pred_scores, toa, len(frames), frame_interval)
         # get saliency maps
-        attention_maps = generate_attention(frames, data_trans, observe_model, fovealmodel, pred_fixations, image_size, rho=0.0, device=device)
+        if not args.static:
+            rho = np.minimum(pred_scores, margin)
+        else:
+            rho = [args.rho] * len(pred_scores)
+        attention_maps = generate_attention(frames, data_trans, observe_model, fovealmodel, pred_fixations, image_size, rho_list=rho, device=device)
 
         vis_file = os.path.join(output_dir, 'vis_%d_%03d.avi'%(accid, vid))
         video_writer = cv2.VideoWriter(vis_file, cv2.VideoWriter_fourcc(*'DIVX'), 2.0, (image_size[1], image_size[0]))
@@ -214,6 +220,6 @@ if __name__ == "__main__":
             curve_img = curve_frames[t]
             curve_height = int(curve_img.shape[0] * (image_size[1] / curve_img.shape[1]))
             curve_img = cv2.resize(curve_img, (image_size[1], curve_height), interpolation = cv2.INTER_AREA)
-            frame[image_size[0]-curve_height:image_size[0]] = cv2.addWeighted(frame[image_size[0]-curve_height:image_size[0]], 0.7, curve_img, 0.3, 0)
+            frame[image_size[0]-curve_height:image_size[0]] = cv2.addWeighted(frame[image_size[0]-curve_height:image_size[0]], 0.3, curve_img, 0.7, 0)
             video_writer.write(frame)
         
