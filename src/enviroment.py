@@ -105,7 +105,7 @@ class DashCamEnv(core.Env):
         salmap_data = salmap.view(batch_size, -1)  # (B, H*W)
         min_vals = salmap_data.min(1, keepdim=True)[0]  # (B, 1)
         max_vals = salmap_data.max(1, keepdim=True)[0]  # (B, 1)
-        salmap_norm = (salmap_data - min_vals) / (max_vals - min_vals)
+        salmap_norm = (salmap_data - min_vals) / (max_vals - min_vals + 1e-6)
         salmap_norm = salmap_norm.view(batch_size, 1, height, width)
         return salmap_norm
 
