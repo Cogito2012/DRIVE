@@ -44,10 +44,10 @@ def test_saliency():
     output_dir = os.path.join(cfg.output, 'eval-saliency')
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    result_file = os.path.join(output_dir, 'eval_static_rho96.npy')
+    result_file = os.path.join(output_dir, 'eval_static100.npy')
     cfg.ENV.use_salmap = True
     cfg.ENV.fusion = 'static'
-    cfg.ENV.rho = 0.96
+    cfg.ENV.rho = 1.0
 
     # initilize environment
     env = DashCamEnv(cfg.ENV, device=cfg.device)
