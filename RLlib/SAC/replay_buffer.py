@@ -39,7 +39,7 @@ class ReplayMemory:
 
 
 class ReplayMemoryGPU:
-    def __init__(self, cfg, batchsize, device):
+    def __init__(self, cfg, batchsize, gpu_id, device):
         self.capacity = cfg.replay_size
         self.batch_size = batchsize
         self.device = device
@@ -50,12 +50,12 @@ class ReplayMemoryGPU:
         # determine the dimension of experience replay
         # (state, action, reward, next_state, rnn_state, labels, done)
         self.dim_mem = self.dim_state + self.dim_action + 1 + self.dim_state + 2 * self.dim_hidden + self.dim_labels + 1
-        self.position, self.buffer = self.create_buffer()
+        self.position, self.buffer = self.create_buffer(gpu_id)
         self.length = 0
 
-    def create_buffer(self):
+    def create_buffer(self, gpu_id):
         nvmlInit()
-        h = nvmlDeviceGetHandleByIndex(self.device.index)
+        h = nvmlDeviceGetHandleByIndex(gpu_id)
         info = nvmlDeviceGetMemoryInfo(h)
         freeGPUMem = info.free * 1e-9  # with Gb unit
         reqGPUMem = self.dim_mem * self.batch_size * self.capacity * 4 * 1e-9 # 4 bytes per float32 element

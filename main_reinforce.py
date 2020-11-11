@@ -45,7 +45,7 @@ def parse_main_args():
     with open(args.config, 'r') as f:
         cfg = EasyDict(yaml.load(f))
     cfg.update(vars(args))
-    device = torch.device('cuda:' + str(cfg.gpu_id)) if torch.cuda.is_available() else torch.device('cpu')
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     cfg.update(device=device)
 
     return cfg

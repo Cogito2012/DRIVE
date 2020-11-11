@@ -52,7 +52,7 @@ def parse_configs():
     with open(args.config, 'r') as f:
         cfg = EasyDict(yaml.safe_load(f))
     cfg.update(vars(args))
-    device = torch.device('cuda:' + str(cfg.gpu_id)) if torch.cuda.is_available() else torch.device('cpu')
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     cfg.update(device=device)
 
     cfg.SAC.image_shape = cfg.ENV.image_shape
@@ -199,7 +199,7 @@ def train():
     agent = SAC(cfg.SAC, device=cfg.device)
 
     # Memory
-    memory = ReplayMemory(cfg.SAC.replay_size) if not cfg.SAC.gpu_replay else ReplayMemoryGPU(cfg.SAC, cfg.ENV.batch_size, device=cfg.device)
+    memory = ReplayMemory(cfg.SAC.replay_size) if not cfg.SAC.gpu_replay else ReplayMemoryGPU(cfg.SAC, cfg.ENV.batch_size, cfg.gpu_id, device=cfg.device)
 
     updates = 0
     for e in range(cfg.num_epoch):
