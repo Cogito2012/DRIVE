@@ -10,6 +10,7 @@ from torchvision import transforms
 from src.DADA2KS import DADA2KS
 from src.data_transform import ProcessImages, ProcessFixations, padding_inv
 import metrics.saliency.metrics as salmetric
+from metrics.eval_tools import evaluation_auc_scores, evaluation_accident_new, evaluate_earliness
 from terminaltables import AsciiTable
 
 
@@ -38,16 +39,23 @@ def eval_video_saliency(pred_salmaps, gt_salmaps, toa_batch=None):
             metrics_video[i, j, :] = np.array([sim, cc, kl], dtype=np.float32)
     return metrics_video
 
-def test_saliency():
+def test_saliency(fusion, rho=None, margin=None, output_dir=None):
 
     # prepare output directory
-    output_dir = os.path.join(cfg.output, 'eval-saliency')
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-    result_file = os.path.join(output_dir, 'eval_static100.npy')
+    
+    if fusion == 'dynamic' and margin is not None:
+        tag = 'margin%02d'%(int(margin * 100))
+        cfg.ENV.fusion_margin = margin
+    elif fusion == 'static' and rho is not None:
+        tag = 'rho%02d'%(int(rho * 100))
+        cfg.ENV.rho = rho
+    else:
+        print("invalid fusion method %s!"%(fusion))
+    result_file = os.path.join(output_dir, 'eval_%s_%s.npy'%(fusion, tag))
     cfg.ENV.use_salmap = True
-    cfg.ENV.fusion = 'static'
-    cfg.ENV.rho = 1.0
+    cfg.ENV.fusion = fusion
 
     # initilize environment
     env = DashCamEnv(cfg.ENV, device=cfg.device)
@@ -56,7 +64,7 @@ def test_saliency():
     height, width = cfg.ENV.image_shape
 
     # initialize dataset
-    testdata_loader = setup_dataloader(cfg.ENV, 0, isTraining=False)
+    testdata_loader = setup_dataloader(cfg.ENV, cfg.num_workers, isTraining=False)
     # AgentENV
     agent = SAC(cfg.SAC, device=cfg.device)
     # load agent models (by default: the last epoch)
@@ -66,6 +74,7 @@ def test_saliency():
 
     if not os.path.exists(result_file):
         all_results = []
+        all_pred_scores, all_gt_labels, all_toas = [], [], []
         # start to test 
         with torch.no_grad():
             for i, (video_data, salmap_data, coord_data, data_info) in tqdm(enumerate(testdata_loader), total=len(testdata_loader)):  # (B, T, H, W, C)
@@ -74,6 +83,7 @@ def test_saliency():
                 # init vars before each episode
                 rnn_state = (torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device),
                                 torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device))
+                score_pred = np.zeros((cfg.ENV.batch_size, env.max_steps), dtype=np.float32)
                 salmaps_pred = []
                 i_steps = 0
                 while i_steps < env.max_steps:
@@ -84,25 +94,34 @@ def test_saliency():
                     actions, rnn_state = agent.select_action(state, rnn_state, evaluate=True)
                     # step
                     state, reward, info = env.step(actions, isTraining=False)
+                    score_pred[:, i_steps] = info['pred_score'].cpu().numpy()  # shape=(B,)
                     i_steps += 1
+                # evaluate saliency
                 salmaps_pred = np.concatenate(salmaps_pred, axis=1)  # (B, T, 330, 792)
                 salmaps_gt = salmap_data.squeeze(-1).numpy().astype(np.float32)
                 eval_result = eval_video_saliency(salmaps_pred, salmaps_gt)  # (B, T, 3)
                 all_results.append(eval_result)
-        all_results = np.concatenate(all_results, axis=0)  # (N, T, 3)
-        np.save(result_file, all_results)
-    else:
-        all_results = np.load(result_file)
+                # gather scores
+                all_pred_scores.append(score_pred)  # (B, T)
+                all_gt_labels.append(env.clsID.cpu().numpy())  # (B,)
+                all_toas.append(env.begin_accident.cpu().numpy())  # (B,)
+        # evaluate
+        all_pred_scores = np.concatenate(all_pred_scores)
+        all_gt_labels = np.concatenate(all_gt_labels)
+        all_toas = np.concatenate(all_toas)
+        FPS = 30/cfg.ENV.frame_interval
+        mTTA = evaluate_earliness(all_pred_scores, all_gt_labels, all_toas, fps=FPS, thresh=0.5)
+        AP, p05, r05 = evaluation_accident_new(all_pred_scores, all_gt_labels, all_toas, fps=FPS)
+        AUC_video, AUC_frame = evaluation_auc_scores(all_pred_scores, all_gt_labels, all_toas, FPS, video_len=5, pos_only=True, random=False)
 
-    final_result = np.mean(np.mean(all_results, axis=1), axis=0)
-    # report performances
-    display_data = [["Metrics", "SIM", "CC", "KL"], ["Ours"]]
-    for val in final_result:
-        display_data[1].append("%.3f"%(val))
-    display_title = "Video Saliency Prediction Results on DADA-2000 Dataset."
-    table = AsciiTable(display_data, display_title)
-    table.inner_footing_row_border = True
-    print(table.table)
+        all_results = np.concatenate(all_results, axis=0)  # (N, T, 3)
+        saliency_result = np.mean(np.mean(all_results, axis=1), axis=0)
+        dict_result = {'SIM': saliency_result[0], 'CC': saliency_result[1], 'KL': saliency_result[2],
+                       'TTA': mTTA, 'AP': AP, 'v-AUC': AUC_video, 'f-AUC': AUC_frame}
+        np.save(result_file, dict_result)
+    else:
+        dict_result = np.load(result_file)
+    return dict_result
 
 
 if __name__ == "__main__":
@@ -115,4 +134,41 @@ if __name__ == "__main__":
     # fix random seed 
     set_deterministic(cfg.seed)
 
-    test_saliency()
+    output_dir = os.path.join(cfg.output, 'eval-saliency')
+    # table head
+    metric_names = ['SIM', 'CC', 'KL', 'TTA', 'AP', 'v-AUC', 'f-AUC']
+    display_data = [["Metrics"]]
+    for name in metric_names:
+        display_data[0].append(name)
+    
+    # evaluate static fusion
+    fusion = 'static'
+    for idx, rho in enumerate(np.arange(0.0, 1.1, 0.1)):
+        items = ["%s, rho=%.1f"%(fusion, rho)]
+        print("Process: %s ..."%(items[0]))
+        dict_result = test_saliency(fusion, rho=rho, output_dir=output_dir)
+        # save results
+        for name in metric_names:
+            items.append("%.3f"%(dict_result[name]))
+        display_data.append(items)
+
+    # evaluate dynamic fusion
+    fusion = 'dynamic'
+    for margin in np.arange(0.0, 1.1, 0.1):
+        items = ["%s, margin=%.1f"%(fusion, margin)]
+        print("Process: %s ..."%(items[0]))
+        dict_result = test_saliency(fusion, margin=margin, output_dir=output_dir)
+        # save results
+        for name in metric_names:
+            items.append("%.3f"%(dict_result[name]))
+        display_data.append(items)
+
+    report_file = os.path.join(output_dir, 'final_report.txt')
+    print("All Results Reported in file: \n%s"%(report_file))
+    with open(report_file, 'w') as f:
+        # print table
+        display_title = "Video Saliency Prediction Results on DADA-2000 Dataset."
+        table = AsciiTable(display_data, display_title)
+        table.inner_heading_row_border = True
+        print(table.table)
+        f.writelines(table.table)
