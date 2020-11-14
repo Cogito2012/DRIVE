@@ -151,7 +151,7 @@ class REINFORCE(object):
         else:
             weight_file = os.path.join(cfg.output, 'checkpoints', 'reinforce_epoch_%02d.pth'%(cfg.test_epoch))
         if os.path.isfile(weight_file):
-            checkpoint = torch.load(weight_file)
+            checkpoint = torch.load(weight_file, map_location=self.device)
             self.policy_model.load_state_dict(checkpoint)
             print("=> loaded checkpoint '{}'".format(weight_file))
         else:

@@ -128,7 +128,7 @@ def test():
     else:
         # load from the last checkpoint
         model_file = os.path.join(ckpt_dir, sorted(os.listdir(ckpt_dir))[-1])
-    ckpt = torch.load(model_file)
+    ckpt = torch.load(model_file, map_location=device)
     model.load_state_dict(ckpt['model'])
     model.to(device)
     model.eval()

@@ -288,7 +288,7 @@ class SAC(object):
         else:
             weight_file = os.path.join(cfg.output, 'checkpoints', 'sac_epoch_' + str(cfg.test_epoch) + '.pt')
         if os.path.isfile(weight_file):
-            checkpoint = torch.load(weight_file)
+            checkpoint = torch.load(weight_file, map_location=self.device)
             self.policy_accident.load_state_dict(checkpoint['policy_acc_model'])
             self.policy_fixation.load_state_dict(checkpoint['policy_fix_model'])
             print("=> loaded checkpoint '{}'".format(weight_file))

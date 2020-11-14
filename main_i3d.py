@@ -58,7 +58,7 @@ def setup_i3d(num_classes, weight='i3d_rgb_charades.pt', device=torch.device('cu
     """Setup I3D model"""
     i3d = InceptionI3d(157, in_channels=3, in_temporal=8)  # load the layers before Mixed_5c
     assert os.path.exists(weight), "I3D weight file does not exist! %s"%(weight)
-    i3d.load_state_dict(torch.load(weight))
+    i3d.load_state_dict(torch.load(weight, map_location=device))
     i3d.replace_logits(num_classes) 
     i3d.to(device)
     i3d = nn.DataParallel(i3d)
@@ -182,7 +182,7 @@ def test():
         testdata_loader,num_classes = setup_dataloader(args, isTraining=False)
 
         i3d = setup_i3d(num_classes, weight=args.pretrained_i3d, device=device)
-        ckpt = torch.load(args.model_weights)
+        ckpt = torch.load(args.model_weights, map_location=device)
         i3d.load_state_dict(ckpt['model'])
 
         i3d.eval()

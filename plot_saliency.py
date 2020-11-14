@@ -63,7 +63,7 @@ if __name__ == "__main__":
     device = torch.device("cuda:0")
     observe_model = MLNet((height, width))
     assert os.path.exists(args.sal_ckpt), "Checkpoint directory does not exist! %s"%(args.sal_ckpt)
-    ckpt = torch.load(args.sal_ckpt)
+    ckpt = torch.load(args.sal_ckpt, map_location=device)
     observe_model.load_state_dict(ckpt['model'])
     observe_model.to(device)
     observe_model.eval()
