@@ -1,4 +1,5 @@
 import tensorflow as tf
+import matplotlib
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -23,16 +24,19 @@ if __name__ == "__main__":
     rewards_SAC_AE_TD = get_reward(SAC_AE_TD_event_file)
     
     fig = plt.figure(figsize=(10,6))
+    plt.rcParams["font.family"] = "Times New Roman"
+    # del matplotlib.font_manager.weight_dict['roman']
+    # matplotlib.font_manager._rebuild()
     sns.set(style="darkgrid", font_scale=2.0)
     # sns.lineplot(time=range(len(test_rewards)), data=test_rewards, color="b", condition="dagger")
-    curve_sac_ae, = plt.plot(range(len(rewards_SAC_AE)), rewards_SAC_AE, 'r-', linewidth=2, label='SAC_RAE_Fusion')
-    curve_sac, = plt.plot(range(len(rewards_SAC)), rewards_SAC, 'b-', linewidth=2, label='SAC_Fusion')
-    curve_sac_ae_bu, = plt.plot(range(len(rewards_SAC_AE_BU)), rewards_SAC_AE_BU, 'g-', linewidth=2, label='SAC_RAE_BUA')
-    curve_sac_ae_td, = plt.plot(range(len(rewards_SAC_AE_TD)), rewards_SAC_AE_TD, 'k-', linewidth=2, label='SAC_RAE_TDA')
+    curve_sac_ae, = plt.plot(range(len(rewards_SAC_AE)), rewards_SAC_AE, 'r-', linewidth=2, label='Ours (DAF)')
+    curve_sac_ae_bu, = plt.plot(range(len(rewards_SAC_AE_BU)), rewards_SAC_AE_BU, 'g-', linewidth=2, label='Ours (BU Only)')
+    curve_sac_ae_td, = plt.plot(range(len(rewards_SAC_AE_TD)), rewards_SAC_AE_TD, 'k-', linewidth=2, label='Ours (TD Only)')
+    curve_sac, = plt.plot(range(len(rewards_SAC)), rewards_SAC, 'b-', linewidth=2, label='Ours (DAF w/o RAE)')
 
     plt.ylabel("Test Reward")
     plt.xlabel("Training Epoch")
-    plt.legend([curve_sac_ae, curve_sac, curve_sac_ae_bu, curve_sac_ae_td], ['SAC_RAE_Fusion', 'SAC_Fusion', 'SAC_RAE_BUA', 'SAC_RAE_TDA'], loc='upper left')
+    plt.legend([curve_sac_ae, curve_sac_ae_bu, curve_sac_ae_td, curve_sac], ['Ours (DAF)', 'Ours (BU Only)', 'Ours (TD Only)', 'Ours (DAF w/o RAE)'], loc='upper left')
 
     # plt.show()
     plt.tight_layout()

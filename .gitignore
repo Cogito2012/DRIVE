@@ -152,3 +152,4 @@ data/DAD
 data/CCD
 *tmp*
 examples/
+draw_curves.py
