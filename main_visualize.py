@@ -64,6 +64,32 @@ def create_curve_video(pred_scores, toa, n_frames, frame_interval):
     return curve_frames
 
 
+def plot_scores(pred_scores, toa, n_frames, frame_interval, out_file):
+    # background
+    fig, ax = plt.subplots(1, figsize=(30,5))
+    fontsize = 25
+    plt.ylim(0, 1.0)
+    plt.xlim(0, n_frames+1)
+
+    xvals = np.arange(n_frames) * frame_interval
+    plt.plot(xvals, pred_scores, linewidth=5.0, color='r')
+    plt.axhline(y=0.5, xmin=0, xmax=n_frames + 1, linewidth=3.0, color='g', linestyle='--')
+    if toa >= 0:
+        plt.axvline(x=toa, ymax=1.0, linewidth=3.0, color='r', linestyle='--')
+        x = [toa, n_frames * frame_interval]
+        y1 = [0, 0]
+        y2 = [1, 1]
+        ax.fill_between(x, y1, y2, color='C1', alpha=0.3, interpolate=True)
+
+    # plt.ylabel('Probability', fontsize=fontsize)
+    # plt.xlabel('Frame (FPS=30)', fontsize=fontsize)
+    plt.xticks(range(0, n_frames*frame_interval + 1, frame_interval*2), fontsize=fontsize)
+    plt.yticks(fontsize=fontsize)
+    plt.tight_layout()
+    plt.savefig(out_file)
+    
+
+
 def minmax_norm(salmap):
     """Normalize the saliency map with min-max
     salmap: (B, 1, H, W)
@@ -140,15 +166,18 @@ if __name__ == "__main__":
                         help='Result file of testing data.')
     parser.add_argument('--rho', type=float, default=0.5,
                         help='The rho value')
+    parser.add_argument('--margin', type=float, default=0.5,
+                        help='The margin value')
     parser.add_argument('--static', action='store_true',
                         help='whether to use static fusion test')
+    parser.add_argument('--paper_mode', action='store_true',
+                        help='whether to get figures for paper submission.')
     parser.add_argument('--output', default='./output/SAC_AE_GG_v5/vis_results',
                         help='Directory of the output. ')
     args = parser.parse_args()
     frame_interval = 5
     image_size = [330, 792]
     height, width = 480, 640
-    margin = 0.5
 
     # environmental model
     device = torch.device("cuda")
@@ -199,11 +228,16 @@ if __name__ == "__main__":
         
         # read frames
         frames = read_frames_from_videos(args.data_path, vidname, start, end, 'rgb_videos', phase='testing', interval=5)
-        # create curves
-        curve_frames = create_curve_video(pred_scores, toa, len(frames), frame_interval)
+        if not args.paper_mode:
+            # create curves
+            curve_frames = create_curve_video(pred_scores, toa, len(frames), frame_interval)
+        # plot curves
+        out_file = os.path.join(args.output, 'curve_%d_%d.png'%(accid, vid))
+        curve = plot_scores(pred_scores, toa, len(frames), frame_interval, out_file)
+
         # get saliency maps
         if not args.static:
-            rho = np.minimum(pred_scores, margin)
+            rho = np.minimum(pred_scores, args.margin)
         else:
             rho = [args.rho] * len(pred_scores)
         attention_maps = generate_attention(frames, data_trans, observe_model, fovealmodel, pred_fixations, image_size, rho_list=rho, device=device)
@@ -218,10 +252,11 @@ if __name__ == "__main__":
             frame_vis = cv2.addWeighted(frame, 0.5, heatmap, 0.5, 0)
 
             # add curve
-            curve_img = curve_frames[t]
-            curve_height = int(curve_img.shape[0] * (image_size[1] / curve_img.shape[1]))
-            curve_img = cv2.resize(curve_img, (image_size[1], curve_height), interpolation = cv2.INTER_AREA)
-            frame_vis[image_size[0]-curve_height:image_size[0]] = cv2.addWeighted(frame_vis[image_size[0]-curve_height:image_size[0]], 0.3, curve_img, 0.7, 0)
+            if not args.paper_mode:
+                curve_img = curve_frames[t]
+                curve_height = int(curve_img.shape[0] * (image_size[1] / curve_img.shape[1]))
+                curve_img = cv2.resize(curve_img, (image_size[1], curve_height), interpolation = cv2.INTER_AREA)
+                frame_vis[image_size[0]-curve_height:image_size[0]] = cv2.addWeighted(frame_vis[image_size[0]-curve_height:image_size[0]], 0.3, curve_img, 0.7, 0)
             video_writer.write(frame_vis)
 
         # generate GT saliency video
