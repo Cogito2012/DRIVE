@@ -34,7 +34,7 @@ def create_curve_video(pred_scores, toa, n_frames, frame_interval):
     plt.xlim(0, n_frames+1)
     plt.ylabel('Probability', fontsize=fontsize)
     plt.xlabel('Frame (FPS=30)', fontsize=fontsize)
-    plt.xticks(range(0, n_frames*frame_interval + 1, frame_interval*2), fontsize=fontsize)
+    plt.xticks(range(0, n_frames*frame_interval + 1, 10), fontsize=fontsize)
     plt.yticks(fontsize=fontsize)
     plt.tight_layout()
     # plt.savefig('tmp_curve.png')
@@ -54,6 +54,7 @@ def create_curve_video(pred_scores, toa, n_frames, frame_interval):
                 y2 = [1, 1]
                 ax.fill_between(x, y1, y2, color='C1', alpha=0.3, interpolate=True)
             curve_writer.grab_frame()
+    plt.close()
     # read frames
     cap = cv2.VideoCapture("tmp_curve_video.mp4")
     ret, frame = cap.read()
@@ -83,10 +84,11 @@ def plot_scores(pred_scores, toa, n_frames, frame_interval, out_file):
 
     # plt.ylabel('Probability', fontsize=fontsize)
     # plt.xlabel('Frame (FPS=30)', fontsize=fontsize)
-    plt.xticks(range(0, n_frames*frame_interval + 1, frame_interval*2), fontsize=fontsize)
+    plt.xticks(range(0, n_frames*frame_interval + 1, 10), fontsize=fontsize)
     plt.yticks(fontsize=fontsize)
     plt.tight_layout()
     plt.savefig(out_file)
+    plt.close()
     
 
 
@@ -103,22 +105,28 @@ def minmax_norm(salmap):
     return salmap_norm
     
 
-def generate_attention(frame_data, data_trans, salmodel, fovealmodel, fixations, image_size, rho_list=None, device=None):
-    # get bottom-up attention
-    input_data = torch.FloatTensor(data_trans(frame_data)).to(device)
-    fixation_data = torch.from_numpy(fixations).to(device)
-    foveal_data = fovealmodel.foveate(input_data, fixation_data)
-    with torch.no_grad():
-        saliency_bu = salmodel(input_data)
-        saliency_bu = minmax_norm(saliency_bu)
-        saliency_td = salmodel(foveal_data)
-        saliency_td = minmax_norm(saliency_td)
-    saliency_bu = saliency_bu.squeeze(1).cpu().numpy()
-    saliency_td = saliency_td.squeeze(1).cpu().numpy()
-    rho = np.expand_dims(np.expand_dims(np.array(rho_list), axis=1), axis=2)
-    saliency = (1 - rho) * saliency_bu + rho * saliency_td
-    # padd the saliency maps to image size
-    attention_maps = saliency_padding(saliency, image_size)
+def generate_attention(frame_data, data_trans, salmodel, fovealmodel, fixations, image_size, n_slice=1, rho_list=None, device=None):
+    assert frame_data.shape[0] % n_slice == 0, "invalid n_slice!"
+    slice_size = int(frame_data.shape[0] / n_slice)
+    attention_maps = []
+    for i in range(n_slice):
+        # get bottom-up attention
+        input_data = torch.FloatTensor(data_trans(frame_data[i*slice_size:(i+1)*slice_size])).to(device)
+        fixation_data = torch.from_numpy(fixations[i*slice_size:(i+1)*slice_size]).to(device)
+        foveal_data = fovealmodel.foveate(input_data, fixation_data)
+        with torch.no_grad():
+            saliency_bu = salmodel(input_data)
+            saliency_bu = minmax_norm(saliency_bu)
+            saliency_td = salmodel(foveal_data)
+            saliency_td = minmax_norm(saliency_td)
+        saliency_bu = saliency_bu.squeeze(1).cpu().numpy()
+        saliency_td = saliency_td.squeeze(1).cpu().numpy()
+        rho = np.expand_dims(np.expand_dims(np.array(rho_list[i*slice_size:(i+1)*slice_size]), axis=1), axis=2)
+        saliency = (1 - rho) * saliency_bu + rho * saliency_td
+        # padd the saliency maps to image size
+        salmap = saliency_padding(saliency, image_size)
+        attention_maps.append(salmap)
+    attention_maps = np.concatenate(attention_maps, axis=0)
     return attention_maps
 
 
@@ -162,7 +170,7 @@ if __name__ == "__main__":
                         help='Configuration file for SAC algorithm.')
     parser.add_argument('--sal_ckpt', default='models/saliency/mlnet_25.pth',
                         help='Pretrained model for bottom-up saliency prediciton.')
-    parser.add_argument('--test_results', default='output/SAC_AE_GG_v5/eval/results.npz',
+    parser.add_argument('--test_results', default='output/DADA2KS_Full_SACAE_Final/eval/results.npz',
                         help='Result file of testing data.')
     parser.add_argument('--rho', type=float, default=0.5,
                         help='The rho value')
@@ -170,12 +178,14 @@ if __name__ == "__main__":
                         help='The margin value')
     parser.add_argument('--static', action='store_true',
                         help='whether to use static fusion test')
-    parser.add_argument('--paper_mode', action='store_true',
-                        help='whether to get figures for paper submission.')
-    parser.add_argument('--output', default='./output/SAC_AE_GG_v5/vis_results',
+    parser.add_argument('--curve_overlap', action='store_true',
+                        help='whether to overlap curve figure on video.')
+    parser.add_argument('--gt_compare', action='store_true',
+                        help='whether to compare with GT saliency video')
+    parser.add_argument('--output', default='./output/DADA2KS_Full_SACAE_Final/vis_results',
                         help='Directory of the output. ')
     args = parser.parse_args()
-    frame_interval = 5
+    frame_interval = 1
     image_size = [330, 792]
     height, width = 480, 640
 
@@ -207,14 +217,12 @@ if __name__ == "__main__":
     if not os.path.exists(output_gt_dir):
         os.makedirs(output_gt_dir)
     
-    visits = []
+    target_list = ['6/058', '11/107', '11/113', '14/013', '38/039', '39/023']
     for i, vids in enumerate(all_vids):
         accid, vid, start, end = vids.tolist()
         vidname = '%d/%03d'%(accid, vid)
-        if vidname in visits:
-            continue    
-        if len(visits) > 1:
-            break
+        if vidname not in target_list:
+            continue
         pred_scores = all_pred_scores[i]
         gt_labels = all_gt_labels[i]
         pred_fixations = all_pred_fixations[i]
@@ -222,17 +230,19 @@ if __name__ == "__main__":
         toa = int(all_toas[i] * 30)
         if not gt_labels > 0:
             continue
-        visits.append(vidname)
 
         print("accident ID=%d, video ID=%d"%(accid, vid))
         
         # read frames
-        frames = read_frames_from_videos(args.data_path, vidname, start, end, 'rgb_videos', phase='testing', interval=5)
-        if not args.paper_mode:
+        frames = read_frames_from_videos(args.data_path, vidname, start, end, 'rgb_videos', phase='testing', interval=frame_interval)
+        if not args.curve_overlap:
             # create curves
             curve_frames = create_curve_video(pred_scores, toa, len(frames), frame_interval)
         # plot curves
-        out_file = os.path.join(args.output, 'curve_%d_%d.png'%(accid, vid))
+        curve_dir = os.path.join(args.output, 'curves')
+        if not os.path.exists(curve_dir):
+            os.makedirs(curve_dir)
+        out_file = os.path.join(curve_dir, 'curve_%d_%d.png'%(accid, vid))
         curve = plot_scores(pred_scores, toa, len(frames), frame_interval, out_file)
 
         # get saliency maps
@@ -240,31 +250,41 @@ if __name__ == "__main__":
             rho = np.minimum(pred_scores, args.margin)
         else:
             rho = [args.rho] * len(pred_scores)
-        attention_maps = generate_attention(frames, data_trans, observe_model, fovealmodel, pred_fixations, image_size, rho_list=rho, device=device)
+        attention_maps = generate_attention(frames, data_trans, observe_model, fovealmodel, pred_fixations, image_size, n_slice=5, rho_list=rho, device=device)
 
-        gt_salmaps = read_frames_from_videos(args.data_path, vidname, start, end, 'salmap_videos', phase='testing', interval=5)
+        gt_salmaps = read_frames_from_videos(args.data_path, vidname, start, end, 'salmap_videos', phase='testing', interval=frame_interval)
 
         vis_file = os.path.join(output_dir, 'vis_%d_%03d.avi'%(accid, vid))
-        video_writer = cv2.VideoWriter(vis_file, cv2.VideoWriter_fourcc(*'DIVX'), 2.0, (image_size[1], image_size[0]))
+        height_vis = image_size[0] if not args.gt_compare else image_size[0] * 2
+        video_writer = cv2.VideoWriter(vis_file, cv2.VideoWriter_fourcc(*'DIVX'), 10.0, (image_size[1], height_vis))
         for t, frame in enumerate(frames):
             # add pred_mask as heatmap
             heatmap = cv2.applyColorMap((attention_maps[t] * 255).astype(np.uint8), cv2.COLORMAP_JET)
             frame_vis = cv2.addWeighted(frame, 0.5, heatmap, 0.5, 0)
 
             # add curve
-            if not args.paper_mode:
+            if not args.curve_overlap:
                 curve_img = curve_frames[t]
                 curve_height = int(curve_img.shape[0] * (image_size[1] / curve_img.shape[1]))
                 curve_img = cv2.resize(curve_img, (image_size[1], curve_height), interpolation = cv2.INTER_AREA)
                 frame_vis[image_size[0]-curve_height:image_size[0]] = cv2.addWeighted(frame_vis[image_size[0]-curve_height:image_size[0]], 0.3, curve_img, 0.7, 0)
+            if args.gt_compare:
+                # add gt_mask as heatmap
+                gt_salmap = cv2.applyColorMap((gt_salmaps[t]), cv2.COLORMAP_JET)
+                frame_vis_gt = cv2.addWeighted(frame, 0.5, gt_salmap, 0.5, 0)
+                # add text
+                cv2.putText(frame_vis, 'Prediction', (40, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2, cv2.LINE_AA)
+                cv2.putText(frame_vis_gt, 'Ground Truth', (40, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2, cv2.LINE_AA)
+                frame_vis = np.concatenate((frame_vis_gt, frame_vis), axis=0)
             video_writer.write(frame_vis)
 
-        # generate GT saliency video
-        vis_file = os.path.join(output_gt_dir, 'vis_%d_%03d.avi'%(accid, vid))
-        video_writer = cv2.VideoWriter(vis_file, cv2.VideoWriter_fourcc(*'DIVX'), 2.0, (image_size[1], image_size[0]))
-        for t, frame in enumerate(frames):
-            # add gt_mask as heatmap
-            heatmap = cv2.applyColorMap((gt_salmaps[t]), cv2.COLORMAP_JET)
-            frame_vis = cv2.addWeighted(frame, 0.5, heatmap, 0.5, 0)
-            video_writer.write(frame_vis)
+        if not args.gt_compare:
+            # generate GT saliency video
+            vis_file = os.path.join(output_gt_dir, 'vis_%d_%03d.avi'%(accid, vid))
+            video_writer = cv2.VideoWriter(vis_file, cv2.VideoWriter_fourcc(*'DIVX'), 10.0, (image_size[1], image_size[0]))
+            for t, frame in enumerate(frames):
+                # add gt_mask as heatmap
+                heatmap = cv2.applyColorMap((gt_salmaps[t]), cv2.COLORMAP_JET)
+                frame_vis = cv2.addWeighted(frame, 0.5, heatmap, 0.5, 0)
+                video_writer.write(frame_vis)
         
