@@ -217,7 +217,8 @@ if __name__ == "__main__":
     if not os.path.exists(output_gt_dir):
         os.makedirs(output_gt_dir)
     
-    target_list = ['6/058', '11/107', '11/113', '14/013', '38/039', '39/023']
+    # target_list = ['6/058', '11/107', '11/113', '14/013', '38/039', '39/023']
+    target_list = ['1/022']
     for i, vids in enumerate(all_vids):
         accid, vid, start, end = vids.tolist()
         vidname = '%d/%03d'%(accid, vid)
@@ -235,7 +236,7 @@ if __name__ == "__main__":
         
         # read frames
         frames = read_frames_from_videos(args.data_path, vidname, start, end, 'rgb_videos', phase='testing', interval=frame_interval)
-        if not args.curve_overlap:
+        if args.curve_overlap:
             # create curves
             curve_frames = create_curve_video(pred_scores, toa, len(frames), frame_interval)
         # plot curves
@@ -263,7 +264,7 @@ if __name__ == "__main__":
             frame_vis = cv2.addWeighted(frame, 0.5, heatmap, 0.5, 0)
 
             # add curve
-            if not args.curve_overlap:
+            if args.curve_overlap:
                 curve_img = curve_frames[t]
                 curve_height = int(curve_img.shape[0] * (image_size[1] / curve_img.shape[1]))
                 curve_img = cv2.resize(curve_img, (image_size[1], curve_height), interpolation = cv2.INTER_AREA)
