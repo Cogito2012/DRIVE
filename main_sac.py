@@ -8,6 +8,8 @@ import yaml
 from easydict import EasyDict
 import time
 
+import warnings
+warnings.filterwarnings("ignore", message=r"Passing", category=FutureWarning)
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
 # from prefetch_generator import BackgroundGenerator

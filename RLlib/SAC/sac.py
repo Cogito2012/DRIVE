@@ -30,6 +30,7 @@ class SAC(object):
         self.batch_size = cfg.batch_size
         self.image_size = cfg.image_shape
         self.input_size = cfg.input_shape
+        self.pure_sl = cfg.pure_sl
 
         # state dims
         self.dim_state = cfg.dim_state
@@ -186,10 +187,14 @@ class SAC(object):
         fix_pred = scales_to_point(fix_pred, self.image_size, self.input_size)  # scaling scales to point
         fix_loss = torch.sum(torch.pow(norm_fix(fix_pred, self.input_size) - norm_fix(fix_gt, self.input_size), 2), dim=1).mean()  # (B) [0, sqrt(2)]
 
-        # weighted sum 
-        acc_policy_loss = actor_loss.detach() + self.beta_accident * cls_loss
-        fix_policy_loss = actor_loss.detach() + self.beta_fixation * fix_loss
-
+        if self.pure_sl:
+            # for pure supervised learning, we just discard the losses from reinforcement learning
+            acc_policy_loss = self.beta_accident * cls_loss
+            fix_policy_loss = self.beta_fixation * fix_loss
+        else:
+            # weighted sum 
+            acc_policy_loss = actor_loss.detach() + self.beta_accident * cls_loss
+            fix_policy_loss = actor_loss.detach() + self.beta_fixation * fix_loss
         # update accident predictor
         self.policy_acc_optim.zero_grad()
         acc_policy_loss.backward()
@@ -251,8 +256,9 @@ class SAC(object):
         # sampling from replay buffer memory
         state_batch, action_batch, reward_batch, next_state_batch, rnn_state_batch, labels_batch, mask_batch = memory.sample(self.batch_size, self.device)
 
-        # update critic networks
-        self.update_critic(state_batch, action_batch, reward_batch, next_state_batch, mask_batch, rnn_state_batch)
+        if not self.pure_sl:
+            # update critic networks
+            self.update_critic(state_batch, action_batch, reward_batch, next_state_batch, mask_batch, rnn_state_batch)
         
         # update actor and alpha
         alpha_values = self.alpha
