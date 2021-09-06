@@ -136,7 +136,6 @@ logs/
 vis_data/
 *.avit
 *.mp4
-*.png
 *.bmp
 *.out
 output*

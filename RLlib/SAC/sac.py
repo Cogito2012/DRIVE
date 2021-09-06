@@ -30,7 +30,7 @@ class SAC(object):
         self.batch_size = cfg.batch_size
         self.image_size = cfg.image_shape
         self.input_size = cfg.input_shape
-        self.pure_sl = cfg.pure_sl
+        self.pure_sl = cfg.pure_sl if hasattr(cfg, 'pure_sl') else False
 
         # state dims
         self.dim_state = cfg.dim_state

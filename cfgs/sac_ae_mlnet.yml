@@ -7,8 +7,8 @@ ENV:
   frame_interval: 5
   step_size: 1
   len_clip: 1
-  rho: 0.5
-  fusion: "dynamic"  # static or dynamic
+  rho: 0.97
+  fusion: "static"  # static or dynamic
   fusion_margin: 0.5
   score_thresh: 0.5
   use_salmap: false  # set to False to speedup data loading
