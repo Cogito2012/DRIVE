@@ -178,14 +178,15 @@ if __name__ == "__main__":
                         help='The margin value')
     parser.add_argument('--static', action='store_true',
                         help='whether to use static fusion test')
-    parser.add_argument('--curve_overlap', action='store_true',
+    parser.add_argument('--no_curve_overlap', action='store_true',
                         help='whether to overlap curve figure on video.')
     parser.add_argument('--gt_compare', action='store_true',
                         help='whether to compare with GT saliency video')
-    parser.add_argument('--output', default='./output/DADA2KS_Full_SACAE_Final/vis_results',
+    parser.add_argument('--output', default='./output/DADA2KS_Full_SACAE_Final/vis_results-01152022',
                         help='Directory of the output. ')
     args = parser.parse_args()
-    frame_interval = 1
+    frame_interval = 5
+    display_fps = 2
     image_size = [330, 792]
     height, width = 480, 640
 
@@ -217,8 +218,8 @@ if __name__ == "__main__":
     if not os.path.exists(output_gt_dir):
         os.makedirs(output_gt_dir)
     
-    # target_list = ['6/058', '11/107', '11/113', '14/013', '38/039', '39/023']
-    target_list = ['1/022']
+    target_list = ['1/022', '6/058', '11/107', '11/113', '14/013', '38/039', '39/023']
+    # target_list = ['1/022']
     for i, vids in enumerate(all_vids):
         accid, vid, start, end = vids.tolist()
         vidname = '%d/%03d'%(accid, vid)
@@ -236,7 +237,7 @@ if __name__ == "__main__":
         
         # read frames
         frames = read_frames_from_videos(args.data_path, vidname, start, end, 'rgb_videos', phase='testing', interval=frame_interval)
-        if args.curve_overlap:
+        if not args.no_curve_overlap:
             # create curves
             curve_frames = create_curve_video(pred_scores, toa, len(frames), frame_interval)
         # plot curves
@@ -257,14 +258,14 @@ if __name__ == "__main__":
 
         vis_file = os.path.join(output_dir, 'vis_%d_%03d.avi'%(accid, vid))
         height_vis = image_size[0] if not args.gt_compare else image_size[0] * 2
-        video_writer = cv2.VideoWriter(vis_file, cv2.VideoWriter_fourcc(*'DIVX'), 10.0, (image_size[1], height_vis))
+        video_writer = cv2.VideoWriter(vis_file, cv2.VideoWriter_fourcc(*'DIVX'), display_fps, (image_size[1], height_vis))
         for t, frame in enumerate(frames):
             # add pred_mask as heatmap
             heatmap = cv2.applyColorMap((attention_maps[t] * 255).astype(np.uint8), cv2.COLORMAP_JET)
             frame_vis = cv2.addWeighted(frame, 0.5, heatmap, 0.5, 0)
 
             # add curve
-            if args.curve_overlap:
+            if not args.no_curve_overlap:
                 curve_img = curve_frames[t]
                 curve_height = int(curve_img.shape[0] * (image_size[1] / curve_img.shape[1]))
                 curve_img = cv2.resize(curve_img, (image_size[1], curve_height), interpolation = cv2.INTER_AREA)
@@ -282,7 +283,7 @@ if __name__ == "__main__":
         if not args.gt_compare:
             # generate GT saliency video
             vis_file = os.path.join(output_gt_dir, 'vis_%d_%03d.avi'%(accid, vid))
-            video_writer = cv2.VideoWriter(vis_file, cv2.VideoWriter_fourcc(*'DIVX'), 10.0, (image_size[1], image_size[0]))
+            video_writer = cv2.VideoWriter(vis_file, cv2.VideoWriter_fourcc(*'DIVX'), display_fps, (image_size[1], image_size[0]))
             for t, frame in enumerate(frames):
                 # add gt_mask as heatmap
                 heatmap = cv2.applyColorMap((gt_salmaps[t]), cv2.COLORMAP_JET)
