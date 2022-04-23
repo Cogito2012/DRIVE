@@ -1,9 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torchvision import models
-
-
+from torchvision import models, transforms
+import math
 
 class ResNet_FPN(torch.nn.Module):
     def __init__(self, n_layers=50, preTrained=False):
@@ -152,7 +151,7 @@ class MLNet(nn.Module):
         x = x * upscaled_prior
         # x = torch.sigmoid(x)
         x = torch.nn.functional.relu(x,inplace=True)
-        
+
         if return_bottom:
             return x, bottom
         return x

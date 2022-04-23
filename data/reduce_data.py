@@ -39,7 +39,7 @@ def reduce_video(src_file, dst_file, ratio, frame_ids):
     ind = 0
     # dest capture
     dst_size = (int(frame.shape[1] * ratio), int(frame.shape[0] * ratio))  # (width, height)
-    cap_dst = cv2.VideoWriter(dst_file, cv2.VideoWriter_fourcc(*'XVID'), FPS, dst_size)
+    cap_dst = cv2.VideoWriter(dst_file, cv2.VideoWriter_fourcc(*'XVID'), 30, dst_size)
     while (ret):
         if ind in frame_ids:
             frame_resize = cv2.resize(frame, dst_size)
@@ -53,10 +53,12 @@ def reduce_data(data_path, ratio, max_frames, subset, result_path):
     # the input path
     coord_path_src = os.path.join(data_path, subset, 'coordinate')
     focus_path_src = os.path.join(data_path, subset, 'focus_videos')
+    salmap_path_src = os.path.join(data_path, subset, 'salmap_videos')
     video_path_src = os.path.join(data_path, subset, 'rgb_videos')
     # the input path
     coord_path_dst = os.path.join(result_path, subset, 'coordinate')
     focus_path_dst = os.path.join(result_path, subset, 'focus_videos')
+    salmap_path_dst = os.path.join(result_path, subset, 'salmap_videos')
     video_path_dst = os.path.join(result_path, subset, 'rgb_videos')
     
     for accID in sorted(os.listdir(coord_path_src)):
@@ -82,6 +84,12 @@ def reduce_data(data_path, ratio, max_frames, subset, result_path):
             focus_video_src = os.path.join(focus_path_src, accID, vid + '.avi')
             focus_video_dst = os.path.join(focus_path_dst, accID, vid + '.avi')
             reduce_video(focus_video_src, focus_video_dst, ratio, frame_ids)
+
+            # read salmap videos
+            salmap_video_src = os.path.join(salmap_path_src, accID, vid + '.avi')
+            salmap_video_dst = os.path.join(salmap_path_dst, accID, vid + '.avi')
+            reduce_video(salmap_video_src, salmap_video_dst, ratio, frame_ids)
+
             # read rgb videos
             rgb_video_src = os.path.join(video_path_src, accID, vid + '.avi')
             rgb_video_dst = os.path.join(video_path_dst, accID, vid + '.avi')
@@ -98,7 +106,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     ratio = 0.5
-    FPS = 30
     max_frames = 450  # for fps=30, the maxtime=20 s after clipped
     if not os.path.exists(args.result_path):
         os.makedirs(args.result_path)

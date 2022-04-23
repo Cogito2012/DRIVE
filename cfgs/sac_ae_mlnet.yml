@@ -1,5 +1,4 @@
 ENV:
-  dataset: DADA2KS
   data_path: ./data/DADA-2000-small
   batch_size: 5
   image_shape: [330, 792]
@@ -8,7 +7,11 @@ ENV:
   frame_interval: 5
   step_size: 1
   len_clip: 1
+  rho: 0.97
+  fusion: "static"  # static or dynamic
+  fusion_margin: 0.5
   score_thresh: 0.5
+  use_salmap: false  # set to False to speedup data loading
   state_norm: true
   saliency: 'MLNet'
   env_model: ./models/saliency/mlnet_25.pth
@@ -20,13 +23,16 @@ SAC:
   num_classes: 2
   hidden_size: 64
   dim_state: 128
-  dim_action: 1
+  dim_action_acc: 1
+  dim_action_fix: 2
   type_acc: "Gaussian"
+  type_fix: "Gaussian"
   actor_update_interval: 2
   target_update_interval: 1
   automatic_entropy_tuning: true
   alpha: 0.001
   beta_accident: 1.0
+  beta_fixation: 10.0
   replay_size: 1000000
   batch_size: 64
   updates_per_step: 4

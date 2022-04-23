@@ -1,44 +1,35 @@
-import argparse, os
-import torch
+import argparse, math, os
 import numpy as np
-import itertools
-import datetime
 import random
 import yaml
 from easydict import EasyDict
-import time
+from src.enviroment import DashCamEnv
+from RLlib.REINFORCE.reinforce import REINFORCE
 
-import warnings
-warnings.filterwarnings("ignore", message=r"Passing", category=FutureWarning)
-from torch.utils.tensorboard import SummaryWriter
+import torch
 from torch.utils.data import DataLoader
-# from prefetch_generator import BackgroundGenerator
 from torchvision import transforms
+from torch.autograd import Variable
 
 from src.DADA2KS import DADA2KS
 from src.data_transform import ProcessImages, ProcessFixations
 from tqdm import tqdm
 import datetime
-
-from src.enviroment import DashCamEnv
-from RLlib.SAC.sac import SAC
-from RLlib.SAC.replay_buffer import ReplayMemory, ReplayMemoryGPU
-from metrics.eval_tools import evaluation_accident, evaluation_fixation, evaluation_auc_scores, evaluation_accident_new, evaluate_earliness
+from torch.utils.tensorboard import SummaryWriter
+from metrics.eval_tools import evaluation_fixation, evaluation_auc_scores, evaluation_accident_new, evaluate_earliness
 
 
-def parse_configs():
-    parser = argparse.ArgumentParser(description='PyTorch SAC implementation')
+def parse_main_args():
+    parser = argparse.ArgumentParser(description='PyTorch REINFORCE implementation')
     # For training and testing
-    parser.add_argument('--config', default="cfgs/sac_default.yml",
-                        help='Configuration file for SAC algorithm.')
-    parser.add_argument('--phase', default='train', choices=['train', 'test'],
+    parser.add_argument('--config', default="cfgs/reinforce_mlnet.yml",
+                        help='Configuration file for REINFORCE algorithm.')
+    parser.add_argument('--phase', default='test', choices=['train', 'test'],
                         help='Training or testing phase.')
     parser.add_argument('--gpu_id', type=int, default=0, metavar='N',
                         help='The ID number of GPU. Default: 0')
     parser.add_argument('--num_workers', type=int, default=4, metavar='N',
                         help='The number of workers to load dataset. Default: 4')
-    parser.add_argument('--baseline', default='none', choices=['random', 'all_pos', 'all_neg', 'none'],
-                        help='setup baseline results for testing comparison')
     parser.add_argument('--seed', type=int, default=123, metavar='N',
                         help='random seed (default: 123)')
     parser.add_argument('--num_epoch', type=int, default=50, metavar='N',
@@ -47,18 +38,15 @@ def parse_configs():
                         help='The epoch interval of model snapshot (default: 5)')
     parser.add_argument('--test_epoch', type=int, default=-1, 
                         help='The snapshot id of trained model for testing.')
-    parser.add_argument('--output', default='./output/SAC',
+    parser.add_argument('--output', default='./output/REINFORCE',
                         help='Directory of the output. ')
     args = parser.parse_args()
 
     with open(args.config, 'r') as f:
-        cfg = EasyDict(yaml.safe_load(f))
+        cfg = EasyDict(yaml.load(f))
     cfg.update(vars(args))
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
     cfg.update(device=device)
-
-    cfg.SAC.image_shape = cfg.ENV.image_shape
-    cfg.SAC.input_shape = cfg.ENV.input_shape
 
     return cfg
 
@@ -70,9 +58,8 @@ def set_deterministic(seed):
     np.random.seed(seed)  # Numpy module.
     random.seed(seed)  # Python random module.
     torch.manual_seed(seed)
-    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
-
 
 def setup_dataloader(cfg, num_workers=0, isTraining=True):
     transform_dict = {'image': transforms.Compose([ProcessImages(cfg.input_shape, mean=[0.218, 0.220, 0.209], std=[0.277, 0.280, 0.277])]),
@@ -97,79 +84,64 @@ def setup_dataloader(cfg, num_workers=0, isTraining=True):
     return traindata_loader, evaldata_loader
 
 
-def write_logs(writer, outputs, updates):
-    """Write the logs to tensorboard"""
-    losses, alpha_values = outputs
-    for (k, v) in losses.items():
-        writer.add_scalar('loss/%s'%(k), v, updates)
-    writer.add_scalar('temprature/alpha', alpha_values, updates)
-
-
-def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch, memory, updates):
-    """ Training process for each epoch of dataset
-    """
+def train_per_epoch(traindata_loader, env, agent, cfg, writer, epoch):
+    # we define each episode as the entire database
     reward_total = 0
-    for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), 
-                                                                                     desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
-        # set environment data
+    for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(traindata_loader), 
+                                                    total=len(traindata_loader), desc='Training Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         state = env.set_data(video_data, coord_data, data_info)
-        # initialization
-        episode_reward = torch.tensor(0.0).to(cfg.device)
-        done = torch.ones((cfg.ENV.batch_size, 1), dtype=torch.float32).to(cfg.device)
-        rnn_state = (torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device),
-                     torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device))
+        entropies, log_probs, rewards, states, all_times, all_fixations = [], [], [], [], [], []
+        rnn_state = Variable(torch.zeros((2, cfg.ENV.batch_size, cfg.REINFORCE.hidden_size))).to(cfg.device) if cfg.REINFORCE.use_lstm else None
+        # run each time step
         episode_steps = 0
+        episode_reward = torch.tensor(0.0).to(cfg.device)
         while episode_steps < env.max_steps:
+            states.append(state)
             # select action
-            actions, rnn_state = agent.select_action(state, rnn_state)
-
-            # Update parameters of all the networks
-            if len(memory) > cfg.SAC.batch_size:
-                for _ in range(cfg.SAC.updates_per_step):
-                    outputs = agent.update_parameters(memory, updates)
-                    if updates % cfg.SAC.logging_interval == 0:
-                        # write log
-                        write_logs(writer, outputs, updates)
-                    updates += 1
-
-            # step to next state
-            next_state, rewards, info = env.step(actions) # Step
+            action, log_prob, entropy, rnn_state = agent.select_action(state, rnn_state)
+            # state transition
+            state, reward, info = env.step(action)
             episode_steps += 1
-            episode_reward += rewards.sum()
-
-            # push the current step into memory
-            cur_time = torch.FloatTensor([(env.cur_step-1) * env.step_size / env.fps] * cfg.ENV.batch_size).unsqueeze(1).to(cfg.device)  # (B, 1)
+            episode_reward += reward.sum()
+            
+            # gather info
+            entropies.append(entropy)
+            log_probs.append(log_prob)
+            rewards.append(reward)
+            cur_time = torch.FloatTensor([[(env.cur_step-1) * env.step_size / env.fps]] * cfg.ENV.batch_size)  # (B, 1)
+            all_times.append(cur_time)
+            # gather GT fixations
             next_step = env.cur_step if episode_steps != env.max_steps else env.cur_step - 1
-            gt_fix_next = env.coord_data[:, next_step * env.step_size, :]  # (B, 2)
-            labels = torch.cat((cur_time, env.clsID.float().unsqueeze(1), env.begin_accident.unsqueeze(1), gt_fix_next), dim=1)
+            gt_fix_next = env.coord_data[:, next_step * env.step_size, :].unsqueeze(1)  # (B, 1, 2)
+            all_fixations.append(gt_fix_next)
 
-            mask = done if episode_steps == env.max_steps else done - 1.0
-            memory.push(state, actions, rewards, next_state, rnn_state, labels, mask) # Append transition to memory
-            # shift to next state
-            state = next_state.clone()
+        all_times = torch.cat(all_times, dim=1).to(cfg.device)
+        all_fixations = torch.cat(all_fixations, dim=1)
+        # update agent after each episode
+        losses = agent.update_parameters(rewards, log_probs, entropies, states, rnn_state, all_times, all_fixations, env, cfg)
 
         reward_total += episode_reward.cpu().numpy()
+        i_episode = epoch * len(traindata_loader) + i
+        for (k, v) in losses.items():
+            writer.add_scalar('loss/%s'%(k), v, i_episode)
     writer.add_scalar('reward/train_per_epoch', reward_total, epoch)
-    
-    return updates
 
 
 def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
-    
+
     total_reward = 0
-    for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), 
-                                                                                    desc='Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
+    for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(evaldata_loader), 
+                                                        total=len(evaldata_loader), desc='Testing Epoch: %d / %d'%(epoch + 1, cfg.num_epoch)):  # (B, T, H, W, C)
         # set environment data
         state = env.set_data(video_data, coord_data, data_info)
-        rnn_state = (torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device),
-                     torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device))
+        rnn_state = torch.zeros((2, cfg.ENV.batch_size, cfg.REINFORCE.hidden_size)).to(cfg.device) if cfg.REINFORCE.use_lstm else None
         episode_reward = torch.tensor(0.0).to(cfg.device)
         episode_steps = 0
         while episode_steps < env.max_steps:
             # select action
-            actions, rnn_state = agent.select_action(state, rnn_state, evaluate=True)
-            # step
-            state, reward, info = env.step(actions)
+            action, log_prob, entropy, rnn_state = agent.select_action(state, rnn_state)
+            # state transition
+            state, reward, info = env.step(action)
             episode_reward += reward.sum()
             episode_steps += 1
 
@@ -178,7 +150,6 @@ def eval_per_epoch(evaldata_loader, env, agent, cfg, writer, epoch):
 
 
 def train():
-
     # initilize environment
     env = DashCamEnv(cfg.ENV, device=cfg.device)
     env.set_model(pretrained=True, weight_file=cfg.ENV.env_model)
@@ -188,30 +159,27 @@ def train():
     ckpt_dir = os.path.join(cfg.output, 'checkpoints')
     if not os.path.exists(ckpt_dir):
         os.makedirs(ckpt_dir)
-    #Tesnorboard
+    #Tesnorboard 
     writer = SummaryWriter(cfg.output + '/tensorboard/train_{}'.format(datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")))
     # backup the config file
     with open(os.path.join(cfg.output, 'cfg.yml'), 'w') as bkfile:
         yaml.dump(cfg, bkfile, default_flow_style=False)
-    
+
     # initialize dataset
     traindata_loader, evaldata_loader = setup_dataloader(cfg.ENV, cfg.num_workers)
 
-    # AgentENV
-    agent = SAC(cfg.SAC, device=cfg.device)
-
-    # Memory
-    memory = ReplayMemory(cfg.SAC.replay_size) if not cfg.SAC.gpu_replay else ReplayMemoryGPU(cfg.SAC, cfg.ENV.batch_size, cfg.gpu_id, device=cfg.device)
-
-    updates = 0
+    # initialize agents
+    agent = REINFORCE(cfg.REINFORCE, device=cfg.device)
+    
+    num_episode = 0
     for e in range(cfg.num_epoch):
         # train each epoch
         agent.set_status('train')
-        updates = train_per_epoch(traindata_loader, env, agent, cfg, writer, e, memory, updates)
+        train_per_epoch(traindata_loader, env, agent, cfg, writer, e)
 
         if (e+1) % cfg.snapshot_interval == 0:
             # save model file for each epoch (episode)
-            agent.save_models(ckpt_dir, cfg, e + 1)
+            torch.save(agent.policy_model.state_dict(), os.path.join(ckpt_dir, 'reinforce_epoch_%02d.pth'%(e+1)))
 
         # evaluate each epoch
         agent.set_status('eval')
@@ -220,7 +188,7 @@ def train():
 
     writer.close()
     env.close()
-    
+
 
 def test_all(testdata_loader, env, agent):
     all_pred_scores, all_gt_labels, all_pred_fixations, all_gt_fixations, all_toas, all_vids = [], [], [], [], [], []
@@ -229,19 +197,16 @@ def test_all(testdata_loader, env, agent):
             %(i+1, len(testdata_loader), data_info[0, 0], data_info[0, 1], video_data.size(1), 30/cfg.ENV.frame_interval))
         # set environment data
         state = env.set_data(video_data, coord_data, data_info)
-
-        # init vars before each episode
-        rnn_state = (torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device),
-                        torch.zeros((cfg.ENV.batch_size, cfg.SAC.hidden_size), dtype=torch.float32).to(cfg.device))
+        rnn_state = torch.zeros((2, cfg.ENV.batch_size, cfg.REINFORCE.hidden_size)).to(cfg.device) if cfg.REINFORCE.use_lstm else None
         score_pred = np.zeros((cfg.ENV.batch_size, env.max_steps), dtype=np.float32)
         fixation_pred = np.zeros((cfg.ENV.batch_size, env.max_steps, 2), dtype=np.float32)
         fixation_gt = np.zeros((cfg.ENV.batch_size, env.max_steps, 2), dtype=np.float32)
         i_steps = 0
         while i_steps < env.max_steps:
             # select action
-            actions, rnn_state = agent.select_action(state, rnn_state, evaluate=True)
-            # step
-            state, reward, info = env.step(actions, isTraining=False)
+            action, _, _, rnn_state = agent.select_action(state, rnn_state)
+            # state transition
+            state, reward, info = env.step(action, isTraining=False)
             # gather actions
             score_pred[:, i_steps] = info['pred_score'].cpu().numpy()  # shape=(B,)
             fixation_pred[:, i_steps] = info['pred_fixation'].cpu().numpy()  # shape=(B, 2)
@@ -266,6 +231,7 @@ def test_all(testdata_loader, env, agent):
     all_vids = np.concatenate(all_vids)
     return all_pred_scores, all_gt_labels, all_pred_fixations, all_gt_fixations, all_toas, all_vids
 
+
 def test():
     # prepare output directory
     output_dir = os.path.join(cfg.output, 'eval')
@@ -286,14 +252,13 @@ def test():
         # initialize dataset
         testdata_loader = setup_dataloader(cfg.ENV, 0, isTraining=False)
 
-        # AgentENV
-        agent = SAC(cfg.SAC, device=cfg.device)
+        # initialize agents
+        agent = REINFORCE(cfg.REINFORCE, device=cfg.device)
 
         # load agent models (by default: the last epoch)
         ckpt_dir = os.path.join(cfg.output, 'checkpoints')
         agent.load_models(ckpt_dir, cfg)
-
-        # start to test 
+        
         agent.set_status('eval')
         with torch.no_grad():
             all_pred_scores, all_gt_labels, all_pred_fixations, all_gt_fixations, all_toas, all_vids = test_all(testdata_loader, env, agent)
@@ -302,16 +267,6 @@ def test():
     # evaluate the results
     FPS = 30/cfg.ENV.frame_interval
     B, T = all_pred_scores.shape
-    if cfg.baseline != 'none':
-        print('---- Reporting baseline methods: ')
-        all_pred_fixations = np.concatenate((np.random.randint(0, cfg.ENV.input_shape[0], (B, T, 1)), 
-                                             np.random.randint(0, cfg.ENV.input_shape[0], (B, T, 1))), axis=-1)
-    if cfg.baseline == 'random':
-        all_pred_scores = np.random.random_sample((B, T))
-    elif cfg.baseline == 'all_pos':
-        all_pred_scores = np.ones((B, T), dtype=np.float32)
-    elif cfg.baseline == 'all_neg':
-        all_pred_scores = np.zeros((B, T), dtype=np.float32)
     
     mTTA = evaluate_earliness(all_pred_scores, all_gt_labels, all_toas, fps=FPS, thresh=0.5)
     print("\n[Earliness] mTTA@0.5 = %.4f seconds."%(mTTA))
@@ -319,22 +274,16 @@ def test():
     AP, p05, r05 = evaluation_accident_new(all_pred_scores, all_gt_labels, all_toas, fps=FPS)
     print("[Correctness] AP = %.4f, precision@0.5 = %.4f, recall@0.5 = %.4f"%(AP, p05, r05))
 
-    isRandom = True if cfg.baseline == 'random' else False
-    AUC_video, AUC_frame = evaluation_auc_scores(all_pred_scores, all_gt_labels, all_toas, FPS, video_len=5, pos_only=True, random=isRandom)
+    AUC_video, AUC_frame = evaluation_auc_scores(all_pred_scores, all_gt_labels, all_toas, FPS, video_len=5, pos_only=True, random=False)
     print("[Correctness] v-AUC = %.5f, f-AUC = %.5f"%(AUC_video, AUC_frame))
 
-    # AP, mTTA, TTA_R80, p05, r05, t05 = evaluation_accident(all_pred_scores, all_gt_labels, all_toas, fps=FPS)
-    # print("AP = %.4f, mean TTA = %.4f, TTA@0.8 = %.4f"%(AP, mTTA, TTA_R80))
-    # print("\nprecision@0.5 = %.4f, recall@0.5 = %.4f, TTA@0.5 = %.4f\n"%(p05, r05, t05))
-    
     mse_fix = evaluation_fixation(all_pred_fixations, all_gt_fixations)
     print('[Attentiveness] Fixation MSE = %.4f\n'%(mse_fix))
 
 
 if __name__ == "__main__":
-    
     # parse input arguments
-    cfg = parse_configs()
+    cfg = parse_main_args()
 
     # fix random seed 
     set_deterministic(cfg.seed)
@@ -345,3 +294,5 @@ if __name__ == "__main__":
         test()
     else:
         raise NotImplementedError
+
+    

@@ -1,0 +1,30 @@
+ENV:
+  data_path: ./data/DADA-2000-small
+  batch_size: 5
+  image_shape: [330, 792]
+  input_shape: [480, 640]
+  data_aug: true
+  frame_interval: 5
+  step_size: 1
+  len_clip: 1
+  rho: 0.5
+  fusion: "dynamic"  # static or dynamic
+  fusion_margin: 0.5
+  score_thresh: 0.5
+  use_salmap: false  # set to False to speedup data loading
+  state_norm: true
+  saliency: 'MLNet'
+  env_model: ./models/saliency/mlnet_25.pth
+REINFORCE:
+  gamma: 0.99
+  lr: 0.001
+  alpha: 0.001
+  beta_accident: 1.0
+  beta_fixation: 10.0
+  num_classes: 2
+  hidden_size: 64
+  dim_state: 128
+  dim_action: 3
+  use_lstm: true
+  with_baseline: true
+  lr_adv: 0.01
