@@ -18,6 +18,9 @@ LOG="${LOG_DIR}/${PHASE}_${EXP_TAG}_`date +'%Y-%m-%d_%H-%M'`.log"
 exec &> >(tee -a "$LOG")
 echo Logging output to "$LOG"
 
-CUDA_VISIBLE_DEVICES=$GPU_IDS python main_sac.py --output ./output/${EXP_TAG} --phase ${PHASE} --num_workers ${NUM_WORKERS} --config cfgs/sac_ae_dad.yml --gpu_id $GPU_IDS
+# run training
+# CUDA_VISIBLE_DEVICES=$GPU_IDS python main_reinforce.py --output ./output/${EXP_TAG} --phase ${PHASE} --config cfgs/reinforce_mlnet.yml --gpu_id $GPU_IDS
+
+CUDA_VISIBLE_DEVICES=$GPU_IDS python main_sac.py --output ./output/${EXP_TAG} --phase ${PHASE} --num_workers ${NUM_WORKERS} --config cfgs/sac_ae_mlnet.yml --gpu_id $GPU_IDS
 
 echo "Done!"

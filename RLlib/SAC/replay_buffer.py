@@ -44,9 +44,9 @@ class ReplayMemoryGPU:
         self.batch_size = batchsize
         self.device = device
         self.dim_state = cfg.dim_state  # 124
-        self.dim_action = cfg.dim_action
+        self.dim_action = cfg.dim_action_acc + cfg.dim_action_fix  # 61
         self.dim_hidden = cfg.hidden_size
-        self.dim_labels = 3
+        self.dim_labels = 5
         # determine the dimension of experience replay
         # (state, action, reward, next_state, rnn_state, labels, done)
         self.dim_mem = self.dim_state + self.dim_action + 1 + self.dim_state + 2 * self.dim_hidden + self.dim_labels + 1

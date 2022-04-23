@@ -7,24 +7,6 @@
 
 International Conference on Computer Vision (**ICCV**), 2021.
 
-## Update
-
-This is the `dev` branch, which contains the SAC-based source codes for datasets **without fixation annotations**.
-
-- To get the code of this branch:
-  ```shell
-  git clone https://github.com/Cogito2012/DRIVE
-  git checkout dev  # This is important!
-  ```
-- To run the training or testing:
-  ```shell
-  bash script_RL.sh train 0 4 DRIVE_DAD_noFix  # train the model on DAD dataset
-  bash script_RL.sh test 0 4 DRIVE_DAD_noFix   # test the model on DAD dataset
-  ```
-- To run the code for DADA-2000 dataset without using fixation annotations, please check the file `script_RL.sh` and change the `--config` argument as: `--config cfgs/sac_ae_dada2ks.yml`, then execute the commands above. 
-
-**Note**: The content below is not updated and kept the same as the `README.md` in `master` branch.
-
 ## Table of Contents
 1. [Introduction](#introduction)
 1. [Installation](#installation)
@@ -64,7 +46,7 @@ pip install -r requirements.txt
 
 This repo currently supports for the down-sized version of [DADA-2000 dataset](https://github.com/JWFangit/LOTVS-DADA). Specifically, we reduced the image size at a half and trimmed the videos into accident clips with at most 450 frames. For more details, please refer to the code script `data/reduce_data.py`. 
 
-We also noticed that the original DADA-2000 dataset was updated, here we provide the processed [DADA-2000-small.zip](https://drive.google.com/drive/folders/1F-ODuuIGBnuf33S1wO73G4wis06NE_tP?usp=sharing) for your convenience. Simply download and unzip it into `data` folder:
+We also noticed that the original DATA-2000 dataset was updated, here we provide the processed [DADA-2000-small.zip](https://drive.google.com/drive/folders/1F-ODuuIGBnuf33S1wO73G4wis06NE_tP?usp=sharing) for your convenience. Simply download and unzip it into `data` folder:
 ```shell
 cd data
 unzip DADA-2000-small.zip ./
