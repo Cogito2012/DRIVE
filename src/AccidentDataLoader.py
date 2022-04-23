@@ -2,19 +2,16 @@ import os
 import numpy as np
 import cv2
 import torch
+import random
 from torch.utils.data import Dataset
-from torchvision import transforms
 
 
 class DADA2KS(Dataset):
-    def __init__(self, root_path, phase, interval=1, transforms={'image':None, 'salmap': None, 'fixpt': None}, 
-                       use_salmap=True, use_fixation=True, data_aug=False):
+    def __init__(self, root_path, phase, interval=1, transforms={'image':None}, data_aug=False):
         self.root_path = root_path
         self.phase = phase  # 'training', 'testing', 'validation'
         self.interval = interval
         self.transforms = transforms
-        self.use_salmap = use_salmap
-        self.use_fixation = use_fixation
         self.data_aug = data_aug
         self.fps = 30
         self.num_classes = 2
@@ -83,21 +80,6 @@ class DADA2KS(Dataset):
         data_info = np.array([accident_id, video_id, start, end, self.labels[index], toa], dtype=np.int32)
         return data_info
 
-    def read_coord_arrays(self, coord_file, start, end):
-        """ Read coordinate array
-        """
-        assert os.path.exists(coord_file), "File does not exist: %s"%(coord_file)
-        coord_data = []
-        with open(coord_file, 'r') as f:
-            all_lines = f.readlines()
-            for fid in range(start, end + 1, self.interval):
-                line = all_lines[fid-1]
-                x_coord = int(line.strip().split(',')[0])
-                y_coord = int(line.strip().split(',')[1])
-                coord_data.append([x_coord, y_coord])
-        coord_data = np.array(coord_data, dtype=np.float32)
-        return coord_data
-
     def __getitem__(self, index):
         # clip start and ending
         start, end = self.clips[index]
@@ -111,56 +93,110 @@ class DADA2KS(Dataset):
         if self.transforms['image'] is not None:
             video_data = self.transforms['image'](video_data)  # (T, C, H, W)
         
-        # read salmap video (trimmed)
-        salmap_data = torch.empty(0)
-        if self.use_salmap:
-            salmap_path = os.path.join(self.root_path, self.phase, 'salmap_videos', self.data_list[index] + '.avi')
-            salmap_data = self.read_video(salmap_path, start, end, toGray=True)
-            if self.transforms['salmap'] is not None:
-                salmap_data = self.transforms['salmap'](salmap_data)  # (T, 1, H, W)
-        
-        # read fixation coordinates
-        coord_data = torch.empty(0)
-        if self.use_fixation:
-            coord_file = os.path.join(self.root_path, self.phase, 'coordinate', self.data_list[index] + '_coordinate.txt')
-            coord_data = self.read_coord_arrays(coord_file, start, end)
-            if self.transforms['fixpt'] is not None:
-                coord_data = self.transforms['fixpt'](coord_data)
-        
-        return video_data, salmap_data, coord_data, data_info
+        return video_data, data_info
+
+
+class DADDataset(Dataset):
+    def __init__(self, root_path, phase, interval=1, transforms=None):
+        self.root_path = root_path
+        self.phase = phase  # 'train', 'test', 'val'
+        self.subset = 'testing' if phase == 'test' else 'training'
+        self.interval = interval
+        self.transforms = transforms
+        self.fps = 20
+        self.num_frames = 100
+        self.num_classes = 2
+        # read samples list
+        self.data_list, self.labels, self.toas = self.get_data_list()
+
+    def get_data_list(self):
+        list_file = os.path.join(self.root_path, 'splits', self.phase + '.txt')
+        assert os.path.exists(list_file), "File does not exist! %s"%(list_file)
+        fileIDs, labels, toas = [], [], []
+        with open(list_file, 'r') as f:
+            for ids, line in enumerate(f.readlines()):
+                sample = line.strip().split(' ')
+                # parse file IDs (training/negative/001355)
+                fileIDs.append(sample[0])
+                # parse label (1: positive, 0: negative)
+                label = int(sample[1])
+                labels.append(label)
+                # get time-of-accident (toa or -1)
+                toas.append(int(sample[2]))
+        return fileIDs, labels, toas
+
+    def __len__(self):
+        return len(self.data_list)
+
+    def read_video(self, video_file):
+        assert os.path.exists(video_file), "Path does not exist: %s"%(video_file)
+        # get the video data
+        video_data = []
+        cap = cv2.VideoCapture(video_file)
+        ret, frame = cap.read()
+        counter = 0
+        while (ret):
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            video_data.append(frame)
+            ret, frame = cap.read()
+            counter += 1
+        assert counter == self.num_frames, "invalid video file! %s"%(video_file)
+        video_data = np.array(video_data, dtype=np.float32)  # 4D tensor
+        return video_data
+
+    def gather_info(self, index):
+        """Gather info for testing usages
+        """
+        # video file info
+        accident_id = 1 if self.labels[index] > 0 else 0
+        video_id = int(self.data_list[index].split('/')[2])  # training/positive/001324
+        # toa info
+        if self.labels[index] > 0:  # positive sample
+            toa = int(self.toas[index] / self.interval)
+        else:
+            toa = int(self.toas[index])  # negative sample (toa=-1)
+        data_info = np.array([accident_id, video_id, 0, self.num_frames-1, self.labels[index], toa], dtype=np.int32)
+        return data_info
+
+    def __getitem__(self, index):
+        # read RGB video (trimmed)
+        video_path = os.path.join(self.root_path, self.data_list[index] + '.mp4')
+        video_data = self.read_video(video_path)
+        # gather info
+        data_info = self.gather_info(index)
+        # pre-process
+        if self.transforms is not None:
+            video_data = self.transforms(video_data)  # (T, C, H, W)
+
+        return video_data, data_info
 
 
 
-def setup_dataloader(cfg):
-    transform_dict = {'image': transforms.Compose([ProcessImages(cfg.input_shape)]),
-                      'salmap': transforms.Compose([ProcessImages(cfg.output_shape)]), 
-                      'fixpt': transforms.Compose([ProcessFixations(cfg.input_shape, cfg.image_shape)])}
-    # training dataset
-    train_data = DADA2KS(cfg.data_path, 'training', interval=cfg.frame_interval, 
-                            transforms=transform_dict, use_salmap=cfg.use_salmap)
-    traindata_loader = DataLoader(dataset=train_data, batch_size=cfg.batch_size, shuffle=True, num_workers=cfg.num_workers, pin_memory=True)
-    # validataion dataset
-    eval_data = DADA2KS(cfg.data_path, 'validation', interval=cfg.frame_interval, 
-                            transforms=transform_dict, use_salmap=cfg.use_salmap)
-    evaldata_loader = DataLoader(dataset=eval_data, batch_size=cfg.batch_size, shuffle=False, num_workers=cfg.num_workers, pin_memory=True)
-    print("# train set: %d, eval set: %d"%(len(train_data), len(eval_data)))
-    return traindata_loader, evaldata_loader
+def set_deterministic(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)  # if you are using multi-GPU.
+    np.random.seed(seed)  # Numpy module.
+    random.seed(seed)  # Python random module.
+    torch.manual_seed(seed)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
 
-     
+
 if __name__ == '__main__':
-    from torch.utils.data import DataLoader
-    from .data_transform import ProcessImages, ProcessFixations
+    from data_setup import setup_dada2ks, setup_ccd, setup_dad
     import argparse, time
     from tqdm import tqdm
 
     parser = argparse.ArgumentParser(description='Testing the data loading')
+    parser.add_argument('--dataset', default='DADA2KS', choices=['DADA2KS', 'CCD', 'DAD'])
     parser.add_argument('--data_path', default='./data/DADA-2000-small',
                         help='The relative path of dataset.')
-    parser.add_argument('--batch_size', type=int, default=16,
+    parser.add_argument('--batch_size', type=int, default=5,
                         help='The batch size in training process. Default: 1')
     parser.add_argument('--frame_interval', type=int, default=1,
                         help='The number of frames per second for each video. Default: 10')
-    parser.add_argument('--phase', default='train', choices=['train', 'test'],
+    parser.add_argument('--phase', default='train', choices=['train', 'test', 'val'],
                         help='Training or testing phase.')
     parser.add_argument('--input_shape', nargs='+', type=int, default=[480, 640],
                         help='The input shape of images. default: [r=480, c=640]')
@@ -168,32 +204,32 @@ if __name__ == '__main__':
                         help='How many sub-workers to load dataset. Default: 0')
     args = parser.parse_args()
 
-    seed = 123
-    np.random.seed(seed)
-    torch.manual_seed(seed)
+    set_deterministic(123)
+
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
     # initialize dataset
-    args.image_shape = [330, 792]
     args.output_shape = (np.array(args.input_shape) / 8).astype(np.int64)
-    args.use_salmap = False
-    traindata_loader, evaldata_loader = setup_dataloader(args)
+    if args.dataset == 'DADA2KS':
+        traindata_loader, evaldata_loader = setup_dada2ks(DADA2KS, args)
+    elif args.dataset == 'DAD':
+        traindata_loader, evaldata_loader = setup_dad(DADDataset, args)
 
     # compute mean & std
     mean_vec = torch.zeros((3), dtype=torch.float32).to(device)
     std_vec = torch.zeros((3), dtype=torch.float32).to(device)
-    for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), desc='[training set]'):
+    for i, (video_data, data_info) in tqdm(enumerate(traindata_loader), total=len(traindata_loader), desc='[training set]'):
         # compute mean
         video_data = video_data.to(device, non_blocking=True)  # (B, T, C, H, W)
         mean_vec += torch.mean(video_data, (0, 1, 3, 4))
         std_vec += torch.std(video_data, (0, 1, 3, 4))
-    for i, (video_data, _, coord_data, data_info) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), desc='[validation set]'):
+    for i, (video_data, data_info) in tqdm(enumerate(evaldata_loader), total=len(evaldata_loader), desc='[validation set]'):
         # compute mean
         video_data = video_data.to(device, non_blocking=True)  # (B, T, C, H, W)
         mean_vec += torch.mean(video_data, (0, 1, 3, 4))
         std_vec += torch.std(video_data, (0, 1, 3, 4))
     mean_vec /= (len(traindata_loader) + len(evaldata_loader))
     std_vec /= (len(traindata_loader) + len(evaldata_loader))
-    print('Mean: ', mean_vec.cpu().numpy())   # Mean:  [0.218, 0.220, 0.209]
-    print('Std: ', std_vec.cpu().numpy())     # Std:   [0.277, 0.280, 0.277]
+    print('Mean: ', mean_vec.cpu().numpy())   # Mean:  [0.218, 0.220, 0.209] (DADA2KS), [0.236, 0.244, 0.246] (CCD)
+    print('Std: ', std_vec.cpu().numpy())     # Std:   [0.277, 0.280, 0.277] (DADA2KS), [0.261, 0.273, 0.284] (CCD)
     print("Done!")
