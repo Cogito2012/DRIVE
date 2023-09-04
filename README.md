@@ -46,7 +46,7 @@ pip install -r requirements.txt
 
 This repo currently supports for the down-sized version of [DADA-2000 dataset](https://github.com/JWFangit/LOTVS-DADA). Specifically, we reduced the image size at a half and trimmed the videos into accident clips with at most 450 frames. For more details, please refer to the code script `data/reduce_data.py`. 
 
-We also noticed that the original DATA-2000 dataset was updated, here we provide the processed [DADA-2000-small.zip](https://drive.google.com/drive/folders/1F-ODuuIGBnuf33S1wO73G4wis06NE_tP?usp=sharing) for your convenience. Simply download and unzip it into `data` folder:
+We also noticed that the original DATA-2000 dataset was updated, here we provide the processed [DADA-2000-small.zip](https://drive.google.com/file/d/1o0TBvwp2UPBmhOsvsXRL1uJoCR4NK15X/view?usp=sharing) for your convenience. Simply download and unzip it into `data` folder:
 ```shell
 cd data
 unzip DADA-2000-small.zip ./
@@ -56,11 +56,11 @@ unzip DADA-2000-small.zip ./
 
 a. Download the pretrained saliency models.
 
-The pre-trained saliency models are provided here: [saliency_models](https://drive.google.com/drive/folders/1tT_iSOxagIJNzqC2T1d6f3UUl75O20pT?usp=sharing), where the `mlnet_25.pth` is used by default in this repo. Please place the file to the path `models/saliency/mlnet_25.pth`.
+The pre-trained saliency models are provided here: [saliency_models](https://drive.google.com/drive/folders/1BcL3zMnj9qqwDobIq09yaaB0kbZDK8n8?usp=sharing), where the `mlnet_25.pth` is used by default in this repo. Please place the file to the path `models/saliency/mlnet_25.pth`.
 
 b. Download the pre-trained DRIVE model:
 
-The pre-trained DRIVE model is provided here: [DADA2KS_Full_SACAE_Final](https://drive.google.com/drive/folders/1wuEw3TahljreVQ18N9-9bfo7ByzsYjoZ?usp=sharing), and place the model file to the path `output/DADA2KS_Full_SACAE_Final/checkpoints/sac_epoch_50.pt`. 
+The pre-trained DRIVE model is provided here: [DADA2KS_Full_SACAE_Final](https://drive.google.com/drive/folders/1MUdHWLNHH6Uf2g1d3XMc8oF3OlUi3ubh?usp=sharing), and place the model file to the path `output/DADA2KS_Full_SACAE_Final/checkpoints/sac_epoch_50.pt`. 
 
 c. Run the DRIVE testing.
 ```shell
@@ -75,7 +75,7 @@ This repo suports for training DRIVE models based on two DRL algorithms, i.e., R
 
 a. Download the pretrained saliency models.
 
-The pre-trained saliency models are provided here: [saliency_models](https://drive.google.com/drive/folders/1tT_iSOxagIJNzqC2T1d6f3UUl75O20pT?usp=sharing), where the `mlnet_25.pth` is used by default in this repo. Please place the file to the path `models/saliency/mlnet_25.pth`.
+The pre-trained saliency models are provided here: [saliency_models](https://drive.google.com/drive/folders/1BcL3zMnj9qqwDobIq09yaaB0kbZDK8n8?usp=sharing), where the `mlnet_25.pth` is used by default in this repo. Please place the file to the path `models/saliency/mlnet_25.pth`.
 
 b. Run the DRIVE training.
 ```shell
